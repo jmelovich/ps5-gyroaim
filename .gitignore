@@ -10,3 +10,11 @@ dist/
 
 # generated
 payload/web_page.h
+app/src/vendor/
+app/sce_sys/pic0.dds
+app/sce_sys/pic1.dds
+app/sce_sys/snd0.at9
+app/sce_sys/background-source.png
+app/sce_sys/launch-background-source.png
+app/gyroaim.elf
+app/dist/

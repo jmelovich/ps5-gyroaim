@@ -395,6 +395,16 @@ int main(void)
                 snprintf(title, sizeof(title), "none");
             ga_log("game started: %s, pid %d", title, (int)game);
 
+            if (!strcmp(title, GA_PANEL_TITLE_ID)) {
+                ga_log("%s is our own control panel; leaving it alone", title);
+                publish_status(&web, 0, title,
+                               "the control panel is open", NULL, 0);
+                attached = 0;
+                usleep(TICK_US);
+                ms += TICK_US / 1000;
+                continue;
+            }
+
             /* A profile saved for this title takes over; otherwise the
              * general settings stay in force. */
             char per_title[GA_PATH_MAX];

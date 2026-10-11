@@ -14,6 +14,7 @@
  *
  * A failure after the first slot is redirected rolls the earlier ones back.
  */
+#include "config.h"
 #include "inject.h"
 #include "kstuff.h"
 #include "log.h"
@@ -210,6 +211,9 @@ int ga_inject_install(const ga_target_t *t, const ga_slot_t *slots,
 
     a->magic = GA_MAGIC;
     a->version = GA_LAYOUT_VERSION;
+    /* The stub cannot reach a constant in .rodata, so its arithmetic
+     * constants are handed over here and never change afterwards. */
+    ga_args_init_consts(a);
     for (int k = 0; k < GA_FN_COUNT; k++)
         a->orig[k] = (uint64_t)(t->fn[k] > 0 ? t->fn[k] : 0);
     a->enabled = 0;

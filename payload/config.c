@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * config.c - the settings, and turning them into what the stub reads.
+ * config.c - the settings, the curve tables, and drift calibration.
  */
 #include "config.h"
 #include "log.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,25 +12,53 @@
 void ga_config_defaults(ga_config_t *c)
 {
     memset(c, 0, sizeof(*c));
+
     c->enabled = 1;
     c->target = GA_TARGET_RIGHT_STICK;
+    c->space = GA_SPACE_PLAYER;
+
     c->activation = GA_ACT_TRIGGER;
     c->trigger_right = 0;
     c->trigger_threshold = 64;
     c->activation_mask = GA_BTN_L2;
-    /* 30 counts per rad/s puts full deflection at about 4 rad/s, or 240
-     * degrees a second of hand movement. Measured hand motion while aiming
-     * runs to 3-5 rad/s, so this is a sane place to start tuning from. */
-    c->sens_yaw = 30.0f;
-    c->sens_pitch = 30.0f;
-    /* PlayStation's frame is right-handed with Y up, so Y is the yaw axis and
-     * X the pitch axis. Positive yaw is turning left and aiming left is a
-     * smaller stick value, hence the default inversion on yaw only. */
+
+    /* A touch over one-to-one is a good starting point for aiming: the camera
+     * turns slightly further than the hands do, which keeps wrist travel
+     * reasonable without losing the sense of pointing. */
+    c->sens_min = 1.2f;
+    c->sens_max = 1.2f;              /* equal, so no acceleration by default */
+    c->sens_lo_rate = 0.0f;
+    c->sens_hi_rate = 75.0f;
+    c->vert_scale = 1.0f;
+
+    /* PlayStation's frame is right-handed with Y up, so Y is yaw, X is pitch
+     * and Z is roll. Positive yaw is turning left while aiming left is a
+     * smaller stick value, hence the inversion on yaw alone. */
     c->axis_yaw = 1;
     c->axis_pitch = 0;
+    c->axis_roll = 2;
     c->invert_yaw = 1;
     c->invert_pitch = 0;
+
+    /* Guesses until measured per game. 300 deg/s is a typical full-stick turn
+     * rate, and most games apply a mild curve with a small deadzone. */
+    c->max_turn = 300.0f;
+    c->game_deadzone = 0.15f;
+    c->game_outer = 0.02f;
+    c->game_power = 1.6f;
+
+    c->tighten = 4.0f;
+    c->smooth_rate = 8.0f;
+    c->carry_cap = 0.25f;
+
+    c->merge_stick = 1;
     c->stick_deadzone = 20;
+
+    c->calibrate = 1;
+
+    c->rumble = 0;
+    c->rumble_scale = 0.35f;
+    c->rumble_period_ms = 60;
 }
 
 static int clampi(int v, int lo, int hi)
@@ -46,91 +75,318 @@ void ga_config_clamp(ga_config_t *c)
 {
     c->enabled = c->enabled ? 1 : 0;
     c->target = clampi(c->target, 0, GA_TARGET_TOUCHPAD);
+    c->space = clampi(c->space, 0, GA_SPACE_PLAYER);
+
     c->activation = clampi(c->activation, 0, GA_ACT_NEVER);
     c->trigger_right = c->trigger_right ? 1 : 0;
     c->trigger_threshold = clampi(c->trigger_threshold, 1, 255);
-    c->sens_yaw = clampf(c->sens_yaw, 0.0f, 400.0f);
-    c->sens_pitch = clampf(c->sens_pitch, 0.0f, 400.0f);
+    if (!c->activation_mask)
+        c->activation_mask = GA_BTN_L2;
+
+    c->sens_min = clampf(c->sens_min, 0.0f, 20.0f);
+    c->sens_max = clampf(c->sens_max, 0.0f, 20.0f);
+    c->sens_lo_rate = clampf(c->sens_lo_rate, 0.0f, 500.0f);
+    c->sens_hi_rate = clampf(c->sens_hi_rate, 0.0f, 1000.0f);
+    c->vert_scale = clampf(c->vert_scale, 0.1f, 3.0f);
     c->invert_yaw = c->invert_yaw ? 1 : 0;
     c->invert_pitch = c->invert_pitch ? 1 : 0;
     c->axis_yaw = clampi(c->axis_yaw, 0, 2);
     c->axis_pitch = clampi(c->axis_pitch, 0, 2);
+    c->axis_roll = clampi(c->axis_roll, 0, 2);
+
+    c->max_turn = clampf(c->max_turn, 20.0f, 2000.0f);
+    c->game_deadzone = clampf(c->game_deadzone, 0.0f, 0.6f);
+    c->game_outer = clampf(c->game_outer, 0.0f, 0.3f);
+    /* Keep some travel between the two deadzones. */
+    if (c->game_deadzone + c->game_outer > 0.9f)
+        c->game_outer = 0.9f - c->game_deadzone;
+    c->game_power = clampf(c->game_power, 0.5f, 4.0f);
+
+    c->tighten = clampf(c->tighten, 0.0f, 60.0f);
+    c->smooth_rate = clampf(c->smooth_rate, 0.0f, 120.0f);
+    /* Smoothing blends between half the threshold and the threshold, so a
+     * threshold at or below zero must mean off. */
+    c->carry_cap = clampf(c->carry_cap, 0.0f, 2.0f);
+
+    c->merge_stick = c->merge_stick ? 1 : 0;
     c->stick_deadzone = clampi(c->stick_deadzone, 0, 120);
-    if (!c->activation_mask)
-        c->activation_mask = GA_BTN_L2;
+
+    c->calibrate = c->calibrate ? 1 : 0;
+    for (int i = 0; i < 3; i++)
+        c->bias[i] = clampf(c->bias[i], -1.0f, 1.0f);
+
+    c->rumble = c->rumble ? 1 : 0;
+    c->rumble_scale = clampf(c->rumble_scale, 0.0f, 2.0f);
+    c->rumble_period_ms = clampi(c->rumble_period_ms, 16, 500);
+}
+
+void ga_args_init_consts(ga_args_t *a)
+{
+    a->k.zero = 0.0f;
+    a->k.one = 1.0f;
+    a->k.half = 0.5f;
+    a->k.counts = 127.0f;
+    a->k.centre = 128.0f;
+    a->k.lut_scale = (float)GA_LUT_LAST;
+    a->k.eps = 1e-5f;
+    a->k.rad_to_deg = 57.29578f;
+    a->k.us_to_s = 1e-6f;
+    a->k.ring_inv = 1.0f / (float)GA_RING_N;
+    a->k.neg_counts = -127.0f;
+}
+
+/* ---- the game's response curve ---------------------------------------- *
+ *
+ * A game takes a stick deflection, ignores a deadzone at each end, and bends
+ * what is left by some exponent to get a camera speed. Both directions of
+ * that mapping are sampled into tables so the stub can look them up: one to
+ * learn what the physical stick is already asking for, and its inverse to
+ * turn a wanted speed back into the deflection that produces it.
+ */
+static float deflection_to_speed(float d, const ga_config_t *c)
+{
+    float live = 1.0f - c->game_deadzone - c->game_outer;
+
+    if (live < 0.01f)
+        live = 0.01f;
+    float t = (d - c->game_deadzone) / live;
+    if (t <= 0.0f)
+        return 0.0f;
+    if (t >= 1.0f)
+        return 1.0f;
+    return powf(t, c->game_power);
+}
+
+static float speed_to_deflection(float v, const ga_config_t *c)
+{
+    float live = 1.0f - c->game_deadzone - c->game_outer;
+
+    if (live < 0.01f)
+        live = 0.01f;
+    if (v <= 0.0f)
+        return 0.0f;
+    if (v > 1.0f)
+        v = 1.0f;
+    return c->game_deadzone + powf(v, 1.0f / c->game_power) * live;
 }
 
 void ga_config_to_args(const ga_config_t *c, ga_args_t *a)
 {
     a->magic = GA_MAGIC;
     a->version = GA_LAYOUT_VERSION;
+
     a->enabled = (uint32_t)c->enabled;
     a->target = (uint32_t)c->target;
+    a->space = (uint32_t)c->space;
+
     a->activation = (uint32_t)c->activation;
     a->activation_mask = c->activation_mask;
     a->trigger_right = (uint32_t)c->trigger_right;
     a->trigger_threshold = (uint32_t)c->trigger_threshold;
+
     a->axis_yaw = (uint32_t)c->axis_yaw;
     a->axis_pitch = (uint32_t)c->axis_pitch;
+    a->axis_roll = (uint32_t)c->axis_roll;
+
+    a->sens_min = c->sens_min;
+    a->sens_max = c->sens_max;
+    a->sens_lo_rate = c->sens_lo_rate;
+    a->sens_hi_rate = c->sens_hi_rate;
+    a->vert_scale = c->vert_scale;
+
+    /* The sign lives here: the stub must not negate a float. */
+    a->invert_yaw = c->invert_yaw ? -1.0f : 1.0f;
+    a->invert_pitch = c->invert_pitch ? -1.0f : 1.0f;
+
+    a->max_turn = c->max_turn;
+    a->tighten = c->tighten;
+    a->smooth_rate = c->smooth_rate;
+    a->carry_cap = c->carry_cap;
+
+    a->merge_stick = (uint32_t)c->merge_stick;
     a->stick_deadzone = (uint32_t)c->stick_deadzone;
 
-    /* The sign lives in the sensitivity. See the note in config.h. */
-    a->sens_yaw = c->invert_yaw ? -c->sens_yaw : c->sens_yaw;
-    a->sens_pitch = c->invert_pitch ? -c->sens_pitch : c->sens_pitch;
+    for (int i = 0; i < 3; i++)
+        a->bias[i] = c->bias[i];
+
+    a->rumble = (uint32_t)c->rumble;
+    a->rumble_scale = c->rumble_scale;
+    a->rumble_period_ms = (uint32_t)c->rumble_period_ms;
+
+    for (int i = 0; i < GA_LUT_N; i++) {
+        float x = (float)i / (float)GA_LUT_LAST;
+        a->lut_to_vel[i] = deflection_to_speed(x, c);
+        a->lut_to_stick[i] = speed_to_deflection(x, c);
+    }
+
     a->settings_seq++;
 }
+
+/* ---- drift ------------------------------------------------------------- *
+ *
+ * The gyro's resting reading is never exactly zero, and left alone that shows
+ * up as a camera that creeps. The fix is to watch the pad while it is still
+ * and subtract what it reads then.
+ *
+ * Knowing when it is still is the hard part. Turning on the spot at a steady
+ * rate looks identical to stillness as far as the accelerometer is concerned,
+ * so a window in which aiming was active is never trusted, and a measured
+ * offset is only eased in rather than taken whole.
+ */
+#define CAL_MIN_SAMPLES   30
+#define CAL_GYRO_SPREAD   0.030f     /* rad/s, about 1.7 deg/s */
+#define CAL_ACCEL_SPREAD  0.025f     /* g */
+#define CAL_FIRST_MAX     0.150f     /* a larger first offset is real motion */
+#define CAL_STEP_MAX      0.040f     /* later, drift only creeps */
+#define CAL_EASE          0.5f
+
+int ga_config_calibrate(ga_config_t *c, const ga_args_t *live, uint32_t *epoch)
+{
+    static int settled;
+
+    if (!c->calibrate)
+        return 0;
+
+    /* Nothing usable yet; leave the window running. */
+    if (live->cal_seen != *epoch || live->cal_count < CAL_MIN_SAMPLES)
+        return 0;
+
+    /* Aiming happened during this window, so it proves nothing. */
+    if (live->cal_was_active) {
+        (*epoch)++;
+        return 0;
+    }
+
+    for (int i = 0; i < 3; i++) {
+        if (live->cal_max[i] - live->cal_min[i] > CAL_GYRO_SPREAD ||
+            live->cal_amax[i] - live->cal_amin[i] > CAL_ACCEL_SPREAD) {
+            (*epoch)++;        /* moving: start again */
+            return 0;
+        }
+    }
+
+    float mean[3];
+    float limit = settled ? CAL_STEP_MAX : CAL_FIRST_MAX;
+    for (int i = 0; i < 3; i++) {
+        mean[i] = live->cal_sum[i] / (float)live->cal_count;
+        if (fabsf(mean[i] - c->bias[i]) > limit) {
+            (*epoch)++;
+            return 0;
+        }
+    }
+
+    int changed = 0;
+    for (int i = 0; i < 3; i++) {
+        float next = c->bias[i] + (mean[i] - c->bias[i]) * CAL_EASE;
+        if (fabsf(next - c->bias[i]) > 1e-6f)
+            changed = 1;
+        c->bias[i] = next;
+    }
+
+    if (changed && !settled)
+        ga_log("drift: resting offset learned, % .4f % .4f % .4f rad/s",
+               (double)c->bias[0], (double)c->bias[1], (double)c->bias[2]);
+    settled = 1;
+    (*epoch)++;
+    return changed;
+}
+
+/* ---- reading and writing settings -------------------------------------- */
+
+void ga_config_title_path(const char *title, char *out, size_t n)
+{
+    if (title && title[0])
+        snprintf(out, n, "%s/%s.txt", GA_DIR, title);
+    else
+        snprintf(out, n, "%s", GA_CONFIG_PATH);
+}
+
+#define FIELDS(I, F, U)                                 \
+    I("enabled", enabled)                               \
+    I("target", target)                                 \
+    I("space", space)                                    \
+    I("activation", activation)                          \
+    I("trigger_right", trigger_right)                    \
+    I("trigger_threshold", trigger_threshold)            \
+    I("invert_yaw", invert_yaw)                          \
+    I("invert_pitch", invert_pitch)                      \
+    I("axis_yaw", axis_yaw)                              \
+    I("axis_pitch", axis_pitch)                          \
+    I("axis_roll", axis_roll)                            \
+    I("merge_stick", merge_stick)                        \
+    I("stick_deadzone", stick_deadzone)                  \
+    I("calibrate", calibrate)                            \
+    I("rumble", rumble)                                  \
+    I("rumble_period_ms", rumble_period_ms)              \
+    F("sens_min", sens_min)                              \
+    F("sens_max", sens_max)                              \
+    F("sens_lo_rate", sens_lo_rate)                      \
+    F("sens_hi_rate", sens_hi_rate)                      \
+    F("vert_scale", vert_scale)                          \
+    F("max_turn", max_turn)                              \
+    F("game_deadzone", game_deadzone)                    \
+    F("game_outer", game_outer)                          \
+    F("game_power", game_power)                          \
+    F("tighten", tighten)                                \
+    F("smooth_rate", smooth_rate)                        \
+    F("carry_cap", carry_cap)                            \
+    F("rumble_scale", rumble_scale)                      \
+    U("activation_mask", activation_mask)
 
 int ga_config_set(ga_config_t *c, const char *key, const char *value)
 {
     if (!c || !key || !value)
         return -1;
 
-#define INT_FIELD(name, member)                      \
+#define AS_INT(name, member)                         \
     if (!strcmp(key, name)) {                        \
         c->member = (int)strtol(value, NULL, 0);     \
         return 0;                                    \
     }
-#define FLOAT_FIELD(name, member)                    \
+#define AS_FLOAT(name, member)                       \
     if (!strcmp(key, name)) {                        \
         c->member = strtof(value, NULL);             \
         return 0;                                    \
     }
-
-    INT_FIELD("enabled", enabled)
-    INT_FIELD("target", target)
-    INT_FIELD("activation", activation)
-    INT_FIELD("trigger_right", trigger_right)
-    INT_FIELD("trigger_threshold", trigger_threshold)
-    INT_FIELD("invert_yaw", invert_yaw)
-    INT_FIELD("invert_pitch", invert_pitch)
-    INT_FIELD("axis_yaw", axis_yaw)
-    INT_FIELD("axis_pitch", axis_pitch)
-    INT_FIELD("stick_deadzone", stick_deadzone)
-    FLOAT_FIELD("sens_yaw", sens_yaw)
-    FLOAT_FIELD("sens_pitch", sens_pitch)
-
-    if (!strcmp(key, "activation_mask")) {
-        c->activation_mask = (uint32_t)strtoul(value, NULL, 0);
-        return 0;
+#define AS_U32(name, member)                         \
+    if (!strcmp(key, name)) {                        \
+        c->member = (uint32_t)strtoul(value, NULL, 0); \
+        return 0;                                    \
     }
 
-#undef INT_FIELD
-#undef FLOAT_FIELD
+    FIELDS(AS_INT, AS_FLOAT, AS_U32)
+
+    if (!strcmp(key, "bias_x")) { c->bias[0] = strtof(value, NULL); return 0; }
+    if (!strcmp(key, "bias_y")) { c->bias[1] = strtof(value, NULL); return 0; }
+    if (!strcmp(key, "bias_z")) { c->bias[2] = strtof(value, NULL); return 0; }
+
+#undef AS_INT
+#undef AS_FLOAT
+#undef AS_U32
     return -1;
 }
 
 int ga_config_json(const ga_config_t *c, char *out, size_t n)
 {
-    return snprintf(out, n,
-        "{\"enabled\":%d,\"target\":%d,\"activation\":%d,"
-        "\"trigger_right\":%d,\"trigger_threshold\":%d,"
-        "\"activation_mask\":%u,\"sens_yaw\":%.2f,\"sens_pitch\":%.2f,"
-        "\"invert_yaw\":%d,\"invert_pitch\":%d,\"axis_yaw\":%d,"
-        "\"axis_pitch\":%d,\"stick_deadzone\":%d}",
-        c->enabled, c->target, c->activation, c->trigger_right,
-        c->trigger_threshold, c->activation_mask, (double)c->sens_yaw,
-        (double)c->sens_pitch, c->invert_yaw, c->invert_pitch,
-        c->axis_yaw, c->axis_pitch, c->stick_deadzone);
+    int w = snprintf(out, n, "{");
+
+#define J_INT(name, member) \
+    w += snprintf(out + w, n - (size_t)w, "\"" name "\":%d,", c->member);
+#define J_FLOAT(name, member) \
+    w += snprintf(out + w, n - (size_t)w, "\"" name "\":%.3f,", (double)c->member);
+#define J_U32(name, member) \
+    w += snprintf(out + w, n - (size_t)w, "\"" name "\":%u,", c->member);
+
+    FIELDS(J_INT, J_FLOAT, J_U32)
+
+#undef J_INT
+#undef J_FLOAT
+#undef J_U32
+
+    w += snprintf(out + w, n - (size_t)w,
+                  "\"bias_x\":%.5f,\"bias_y\":%.5f,\"bias_z\":%.5f}",
+                  (double)c->bias[0], (double)c->bias[1], (double)c->bias[2]);
+    return w;
 }
 
 int ga_config_load(ga_config_t *c, const char *path)
@@ -162,26 +418,22 @@ int ga_config_save(const ga_config_t *c, const char *path)
 
     if (!f)
         return -1;
-    fprintf(f,
-            "# GyroAim settings. Edit here or from the portal; the service\n"
-            "# rereads this file only at startup.\n"
-            "enabled=%d\n"
-            "target=%d\n"
-            "activation=%d\n"
-            "trigger_right=%d\n"
-            "trigger_threshold=%d\n"
-            "activation_mask=0x%x\n"
-            "sens_yaw=%.2f\n"
-            "sens_pitch=%.2f\n"
-            "invert_yaw=%d\n"
-            "invert_pitch=%d\n"
-            "axis_yaw=%d\n"
-            "axis_pitch=%d\n"
-            "stick_deadzone=%d\n",
-            c->enabled, c->target, c->activation, c->trigger_right,
-            c->trigger_threshold, c->activation_mask, (double)c->sens_yaw,
-            (double)c->sens_pitch, c->invert_yaw, c->invert_pitch,
-            c->axis_yaw, c->axis_pitch, c->stick_deadzone);
+
+    fprintf(f, "# GyroAim settings. The service reads this at startup and\n"
+               "# writes it back whenever something changes in the portal.\n");
+
+#define W_INT(name, member)   fprintf(f, name "=%d\n", c->member);
+#define W_FLOAT(name, member) fprintf(f, name "=%.4f\n", (double)c->member);
+#define W_U32(name, member)   fprintf(f, name "=0x%x\n", c->member);
+
+    FIELDS(W_INT, W_FLOAT, W_U32)
+
+#undef W_INT
+#undef W_FLOAT
+#undef W_U32
+
+    fprintf(f, "bias_x=%.6f\nbias_y=%.6f\nbias_z=%.6f\n",
+            (double)c->bias[0], (double)c->bias[1], (double)c->bias[2]);
     fclose(f);
     return 0;
 }

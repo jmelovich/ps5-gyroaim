@@ -30,7 +30,7 @@ GA_SELFTEST ?= 0
 # The injected stub is copied byte for byte into another process, so it must be
 # position independent.
 CFLAGS  := -Wall -Wextra -Werror -O2 -g -std=gnu11 -fPIC \
-           -fno-stack-protector \
+           -fno-stack-protector -fno-math-errno \
            -D__PROSPERO__ -DGYROAIM_PORT=$(GYROAIM_PORT) -DGA_SELFTEST=$(GA_SELFTEST)
 
 # The SDK wrapper already supplies crt1.o, -lc, -lkernel_web and the Sce
@@ -46,6 +46,15 @@ all: $(ELF) check-stub
 
 $(ELF): $(OBJ)
 	$(CC) -o $@ $(OBJ) $(LDFLAGS)
+
+# The stub gets no vectorisation. Clang will happily fold two adjacent
+# operations into one SSE instruction and park the operand in a vector
+# literal in .rodata, which the copied block cannot reach. Scalar code keeps
+# small integers as immediates, where they belong.
+STUB_CFLAGS := $(CFLAGS) -fno-vectorize -fno-slp-vectorize
+
+build/stub.o: stub.c | build
+	$(CC) $(STUB_CFLAGS) -c -o $@ $<
 
 build/%.o: %.c | build
 	$(CC) $(CFLAGS) -c -o $@ $<

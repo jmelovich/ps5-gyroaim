@@ -17,6 +17,7 @@
 #include "web.h"
 
 #include <errno.h>
+#include <math.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <stdio.h>
@@ -73,7 +74,17 @@ static int bind_portal(void)
     if (fd < 0)
         return -1;
 
-    /* Deliberately no SO_REUSEADDR: the bind failing is the signal. */
+    /* SO_REUSEADDR, but never SO_REUSEPORT.
+     *
+     * The bind failing is how a second instance learns the first is running,
+     * so two processes must never be able to listen at once, which is what
+     * SO_REUSEPORT would allow. SO_REUSEADDR only waives the wait for
+     * connections left in TIME_WAIT by closed portal requests. Without it a
+     * replacement instance cannot rebind for a minute or so after anyone has
+     * used the portal, which is exactly when a replacement is most likely. */
+    int on = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -156,54 +167,53 @@ static int claim_single_instance(void)
 
 /* ---- self test -------------------------------------------------------- *
  *
- * Whether the stub writes the stick cannot be judged from a controller lying
- * still, because the gyro reads nearly zero and the output should then be
- * unchanged. Feeding in an artificial bias makes the expected output exact:
- * with a bias of -1 rad/s on the yaw axis the transform sees a steady 1 rad/s
- * turn and must deflect the stick by the sensitivity, in counts.
- *
- * This proves the whole path end to end without anyone touching the pad.
+ * Feeds the transform an artificial resting offset so it sees a steady turn
+ * with nobody touching the pad, then checks that the camera was asked to move
+ * in the right direction by roughly the sensitivity, and that a deflection
+ * came out. It deliberately does not recompute the whole pipeline: that would
+ * only test the test.
  */
 __attribute__((unused))
-static void selftest(const ga_inject_t *inj, const ga_args_t *base)
+static void selftest(const ga_inject_t *inj, const ga_args_t *base,
+                     const ga_config_t *cfg)
 {
     ga_args_t probe = *base;
     ga_args_t got;
 
     probe.activation = GA_ACT_ALWAYS;
-    probe.bias[1] = -1.0f;          /* axis_yaw is 1 */
+    probe.bias[1] = -1.0f;              /* axis_yaw defaults to 1 */
+    probe.tighten = 0.0f;
+    probe.smooth_rate = 0.0f;
     probe.settings_seq = base->settings_seq + 1;
 
     if (ga_inject_publish(inj, &probe) != 0) {
         ga_log("self test: could not publish");
         return;
     }
-    usleep(500000);
+    usleep(600000);
 
     if (ga_inject_read(inj, &got) != 0) {
         ga_log("self test: could not read back");
+        ga_inject_publish(inj, base);
         return;
     }
 
-    /* The stub centres on 128 unless the physical stick is outside its
-     * deadzone, and adds the offset for yaw. */
-    int base_x = 128;
-    if (abs((int)got.in_rx - 128) > (int)probe.stick_deadzone)
-        base_x = got.in_rx;
-    int want = base_x + (int)(got.used_yaw * probe.sens_yaw);
-    if (want < 1)
-        want = 1;
-    if (want > 255)
-        want = 255;
+    /* One rad/s is 57.3 deg/s, inverted on yaw by default. */
+    float want_rate = 57.29578f * (cfg->invert_yaw ? -1.0f : 1.0f);
+    float want_cam = want_rate * cfg->sens_min;
+    int rate_ok = fabsf(got.rate_yaw - want_rate) < 3.0f;
+    int cam_ok = fabsf(got.cam_yaw - want_cam) < fabsf(want_cam) * 0.1f + 3.0f;
+    int moved = got.out_frac > 0.01f;
+    int side_ok = cfg->invert_yaw ? got.out_rx < 128 : got.out_rx > 128;
 
-    ga_log("self test: yaw rate % .3f rad/s, expected stick x %d, got %d%s",
-           (double)got.used_yaw, want, got.out_rx,
-           got.out_rx == want ? "  PASS" : "  MISMATCH");
-    ga_log("self test: applied %llu of %llu reads, active=%u",
-           (unsigned long long)got.applied, (unsigned long long)got.calls,
-           got.active);
+    ga_log("self test: rate % .1f deg/s (want % .1f) %s", (double)got.rate_yaw,
+           (double)want_rate, rate_ok ? "ok" : "WRONG");
+    ga_log("self test: camera % .1f deg/s (want % .1f) %s",
+           (double)got.cam_yaw, (double)want_cam, cam_ok ? "ok" : "WRONG");
+    ga_log("self test: deflection %.3f, stick x %u -> %s",
+           (double)got.out_frac, got.out_rx,
+           (moved && side_ok) ? "PASS" : "FAIL");
 
-    /* Put the real settings back. */
     ga_inject_publish(inj, base);
 }
 
@@ -211,18 +221,16 @@ static void selftest(const ga_inject_t *inj, const ga_args_t *base)
 
 static void report(const ga_args_t *t)
 {
-    ga_log("pad: handle %d conn %u btn %08x L2 %3u  in R %3u,%3u -> out %3u,%3u"
-           "  %s",
-           t->last_handle, t->connected, t->last_buttons, t->last_l2,
-           t->in_rx, t->in_ry, t->out_rx, t->out_ry,
-           t->active ? "ACTIVE" : "idle");
-    ga_log("  gyro rad/s % .4f % .4f % .4f   accel % .3f % .3f % .3f",
-           (double)t->last_angvel[0], (double)t->last_angvel[1],
-           (double)t->last_angvel[2], (double)t->last_accel[0],
-           (double)t->last_accel[1], (double)t->last_accel[2]);
-    ga_log("  used yaw % .4f pitch % .4f   reads %llu, applied %llu",
-           (double)t->used_yaw, (double)t->used_pitch,
-           (unsigned long long)t->calls, (unsigned long long)t->applied);
+    ga_log("pad: L2 %3u  in %3u,%3u -> out %3u,%3u  %s%s",
+           t->last_l2, t->in_rx, t->in_ry, t->out_rx, t->out_ry,
+           t->active ? "aiming" : "idle", t->saturated ? " (at the limit)" : "");
+    ga_log("  rate % .1f, % .1f deg/s -> camera % .1f, % .1f deg/s"
+           "  deflection %.3f",
+           (double)t->rate_yaw, (double)t->rate_pitch,
+           (double)t->cam_yaw, (double)t->cam_pitch, (double)t->out_frac);
+    ga_log("  reads %llu, applied %llu, stillness window %u sample(s)%s",
+           (unsigned long long)t->calls, (unsigned long long)t->applied,
+           t->cal_count, t->cal_was_active ? " (aiming, not usable)" : "");
 }
 
 static int attach(pid_t game, const char *title, ga_inject_t *inj)
@@ -281,6 +289,8 @@ int main(void)
 {
     pid_t game = -1;
     char title[GA_TITLE_ID_MAX] = "";
+    char active_path[GA_PATH_MAX];
+    uint32_t cal_epoch = 1;
     ga_inject_t inj;
     ga_args_t settings;
     ga_args_t telemetry;
@@ -320,11 +330,14 @@ int main(void)
     }
     write_pidfile();
 
-    if (ga_config_load(&web.cfg, GA_CONFIG_PATH) == 0)
-        ga_log("settings loaded from %s", GA_CONFIG_PATH);
-    else if (ga_config_save(&web.cfg, GA_CONFIG_PATH) == 0)
-        ga_log("wrote default settings to %s", GA_CONFIG_PATH);
+    snprintf(active_path, sizeof(active_path), "%s", GA_CONFIG_PATH);
+    if (ga_config_load(&web.cfg, active_path) == 0)
+        ga_log("settings loaded from %s", active_path);
+    else if (ga_config_save(&web.cfg, active_path) == 0)
+        ga_log("wrote default settings to %s", active_path);
     ga_config_to_args(&web.cfg, &settings);
+    settings.cal_epoch = cal_epoch;
+    snprintf(web.path, sizeof(web.path), "%s", active_path);
 
     ga_web_start(portal, &web);
 
@@ -342,10 +355,18 @@ int main(void)
 
         /* Settings changed in the portal: fold them in and remember them. */
         pthread_mutex_lock(&web.lock);
+        if (web.save_as_title && title[0]) {
+            ga_config_title_path(title, active_path, sizeof(active_path));
+            snprintf(web.path, sizeof(web.path), "%s", active_path);
+            web.save_as_title = 0;
+            web.cfg_dirty = 1;
+            ga_log("settings will now be kept in %s", active_path);
+        }
         if (web.cfg_dirty) {
             ga_config_to_args(&web.cfg, &settings);
+            settings.cal_epoch = cal_epoch;
             web.cfg_dirty = 0;
-            ga_config_save(&web.cfg, GA_CONFIG_PATH);
+            ga_config_save(&web.cfg, active_path);
         }
         pthread_mutex_unlock(&web.lock);
 
@@ -355,12 +376,29 @@ int main(void)
                 snprintf(title, sizeof(title), "none");
             ga_log("game started: %s, pid %d", title, (int)game);
 
+            /* A profile saved for this title takes over; otherwise the
+             * general settings stay in force. */
+            char per_title[GA_PATH_MAX];
+            ga_config_title_path(title, per_title, sizeof(per_title));
+            pthread_mutex_lock(&web.lock);
+            if (ga_config_load(&web.cfg, per_title) == 0) {
+                snprintf(active_path, sizeof(active_path), "%s", per_title);
+                ga_log("using the profile saved for %s", title);
+            } else {
+                snprintf(active_path, sizeof(active_path), "%s",
+                         GA_CONFIG_PATH);
+            }
+            snprintf(web.path, sizeof(web.path), "%s", active_path);
+            ga_config_to_args(&web.cfg, &settings);
+            settings.cal_epoch = cal_epoch;
+            pthread_mutex_unlock(&web.lock);
+
             publish_status(&web, 0, title, "attaching", NULL, 0);
             attached = attach(game, title, &inj) == 0;
             if (attached) {
                 ga_inject_publish(&inj, &settings);
                 if (GA_SELFTEST)
-                    selftest(&inj, &settings);
+                    selftest(&inj, &settings, &web.cfg);
                 ga_log("%s: transform live", title);
                 publish_status(&web, 1, title, "transform live", NULL, 0);
                 next_report = 0;
@@ -389,6 +427,21 @@ int main(void)
                                "lost contact with the transform", NULL, 0);
             } else if (ga_inject_read(&inj, &telemetry) == 0) {
                 publish_status(&web, 1, title, "transform live", &telemetry, 1);
+
+                /* Learn the gyro's resting offset while the pad is still. */
+                pthread_mutex_lock(&web.lock);
+                uint32_t before = cal_epoch;
+                int learned = ga_config_calibrate(&web.cfg, &telemetry,
+                                                  &cal_epoch);
+                if (learned) {
+                    for (int i = 0; i < 3; i++)
+                        settings.bias[i] = web.cfg.bias[i];
+                    ga_config_save(&web.cfg, active_path);
+                }
+                if (cal_epoch != before)
+                    settings.cal_epoch = cal_epoch;
+                pthread_mutex_unlock(&web.lock);
+
                 if (ms >= next_report) {
                     report(&telemetry);
                     next_report = ms + REPORT_MS;

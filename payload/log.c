@@ -24,6 +24,7 @@
 /* Enough to explain a failed hook install without growing without bound. */
 #define RING_LINES 128
 #define RING_WIDTH 160
+#define BODY_MAX   (RING_WIDTH - 16)
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static FILE *g_file;
@@ -61,7 +62,7 @@ void ga_log_open(void)
 
 void ga_log(const char *fmt, ...)
 {
-    char body[RING_WIDTH];
+    char body[BODY_MAX];
     char line[RING_WIDTH + 32];
     va_list ap;
 

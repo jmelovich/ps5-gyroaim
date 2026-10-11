@@ -105,3 +105,34 @@ Other measured details:
   game. It dies with the process anyway.
 - `kernel_proc_copyin` is used in small chunks and read back to verify, since
   a partial transfer would leave half a function in the game.
+
+## Keeping the compiler out of .rodata
+
+Removing float literals from the stub is not enough. Clang will fold two
+adjacent operations into one SSE instruction and park the operand in a vector
+literal, so `(int)x - 128` done twice in a row becomes a packed subtract with
+`-128` in `.rodata`. Chasing those one at a time does not converge.
+
+The fix is structural: the stub is compiled `-fno-vectorize
+-fno-slp-vectorize`, which keeps small integers as immediates where they
+belong. `-fno-math-errno` also matters, so `sqrtf` becomes one instruction
+instead of a call. `make check-stub` fails the build on any relocation in the
+stub's section, which is the only reliable guard.
+
+Constants that genuinely are needed live in `ga_consts_t` on the shared page,
+filled in once before injection.
+
+## The portal's socket needs SO_REUSEADDR
+
+The listening socket doubles as the single-instance lock, so two processes
+must never listen at once. That argues for omitting `SO_REUSEADDR`, and an
+early version did.
+
+It was wrong. Closed portal requests leave connections in `TIME_WAIT` on that
+port, and without `SO_REUSEADDR` a replacement instance cannot bind for about
+a minute afterwards, which is exactly when a replacement is most likely. The
+old instance would stand down and the new one would then refuse to start,
+leaving no service running at all.
+
+`SO_REUSEADDR` waives only the `TIME_WAIT` wait. Two simultaneous listeners
+would need `SO_REUSEPORT`, which must never be set here.

@@ -8,7 +8,8 @@
  * Offsets are asserted below. `connected` landing at 0x4c is the anchor that
  * pins the motion and touch block above it. The order of acceleration and
  * angularVelocity inside that block is the one thing the public sources
- * disagree on, so ga_pad_probe() dumps both and says which one reads gravity.
+ * disagreed on. It was settled on hardware: at rest, 0x1c reads about 1 g and
+ * 0x28 reads about zero. See docs/CONSOLE_NOTES.md.
  */
 typedef struct {
     uint16_t x, y;
@@ -64,10 +65,3 @@ _Static_assert(__builtin_offsetof(ga_pad_data_t, timestamp_us) == 0x50, "");
 #define GA_BTN_TOUCH     0x00100000u
 #define GA_BTN_INTERCEPT 0x80000000u
 
-/* Opens the pad from this process and logs what it reads, including whether
- * the motion fields carry anything. Closes everything before returning.
- * Returns 0 if a pad was opened and read at least once.
- *
- * samples: how many reads to log. seconds: how long to sample for.
- */
-int ga_pad_probe(unsigned samples);

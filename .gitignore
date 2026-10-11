@@ -13,3 +13,10 @@ payload/web_page.h
 app/src/vendor/
 app/gyroaim.elf
 app/dist/
+
+# host test binaries and their output
+tests/curve_test
+tests/transform_test
+tests/qr_test
+tests/qr-sample.pgm
+tests/qr-sample.png

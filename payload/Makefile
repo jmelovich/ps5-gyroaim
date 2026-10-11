@@ -41,7 +41,7 @@ CFLAGS  := -Wall -Wextra -Werror -O2 -g -std=gnu11 -fPIC \
 # dependencies; kernel_*/klog_* live in crt1.o.
 LDFLAGS := -lScePad -lSceUserService -lpthread -ldl
 
-SRC := main.c log.c proc.c pad.c hook.c kstuff.c stub.c inject.c config.c web.c
+SRC := main.c log.c proc.c hook.c kstuff.c stub.c inject.c config.c web.c
 OBJ := $(SRC:%.c=build/%.o)
 DEP := $(OBJ:.o=.d)
 

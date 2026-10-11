@@ -241,3 +241,19 @@ bundled copy for the sole purpose of having it clear up and exit.
 
 Settings are kept unless asked for explicitly. Someone removing the service to
 reinstall it should not lose an evening of tuning.
+
+## The service cannot read the pad itself
+
+Worth stating because it rules out a simpler design. A payload cannot open the
+controller: `scePadOpen` returns `0x809b0081` and `scePadGetHandle` returns
+`0x80920008`, whether or not a title is running, because the payload is not a
+registered pad client. Ghostpad works around it by injecting into SceShellCore
+and reading at a few hertz, which is far too slow for aiming.
+
+That is why the transform lives inside the game, where the pad data is already
+being delivered and the gyro arrives in the same struct as the sticks. The
+in-game stub is not a workaround for something neater; it is the only place
+the data exists at full rate.
+
+`pad.h` keeps the sample layout and its static assertions, which are the
+authoritative record of the offsets and fail the build if anyone disturbs them.

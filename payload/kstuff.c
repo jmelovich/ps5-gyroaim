@@ -81,6 +81,32 @@ int ga_kstuff_mmap(pid_t pid, size_t len, intptr_t *out_addr)
     return 0;
 }
 
+void ga_kstuff_diagnose(pid_t pid)
+{
+    uint64_t none[6] = { 0, 0, 0, 0, 0, 0 };
+    int64_t r = ga_kstuff_syscall(pid, SYS_getpid, none);
+
+    ga_log("bridge: remote getpid in pid %d returned %lld (%s)", (int)pid,
+           (long long)r,
+           r == (int64_t)pid ? "the bridge works"
+                             : "the bridge is not reaching that process");
+
+    /* Walk down the sizes: a title's memory budget can be exhausted even
+     * though the bridge is fine. */
+    static const size_t sizes[] = { 0x8000, 0x4000 };
+    for (unsigned i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        uint64_t args[6] = { 0, (uint64_t)sizes[i], PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANON, UINT64_MAX, 0 };
+        int64_t a = ga_kstuff_syscall(pid, SYS_mmap, args);
+        ga_log("bridge: remote mmap of %zu bytes returned 0x%llx", sizes[i],
+               (unsigned long long)a);
+        if (a > 0) {
+            uint64_t un[6] = { (uint64_t)a, (uint64_t)sizes[i], 0, 0, 0, 0 };
+            ga_kstuff_syscall(pid, SYS_munmap, un);
+        }
+    }
+}
+
 int ga_kstuff_munmap(pid_t pid, intptr_t addr, size_t len)
 {
     len = (len + TARGET_PAGE - 1) & ~(size_t)(TARGET_PAGE - 1);

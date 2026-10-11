@@ -264,6 +264,7 @@ static int attach(pid_t game, const char *title, ga_inject_t *inj)
 
     if (ga_inject_install(&target, slots, (unsigned)n, inj) != 0) {
         ga_log("%s: install failed; the game is untouched", title);
+        ga_kstuff_diagnose(game);
         return -1;
     }
     return 0;
@@ -408,7 +409,9 @@ int main(void)
             }
         } else if (n == 0 && game != -1) {
             ga_log("game stopped: %s, pid %d", title, (int)game);
-            /* The process is gone; there is nothing left to restore. */
+            /* The process is gone; there is nothing left to restore, and the
+             * mapping went with it. */
+            ga_inject_forget(game);
             memset(&inj, 0, sizeof(inj));
             attached = 0;
             game = -1;

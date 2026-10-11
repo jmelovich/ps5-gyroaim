@@ -26,5 +26,9 @@ int64_t ga_kstuff_syscall(pid_t pid, uint64_t number, const uint64_t args[6]);
  * cannot be paged out under the game's own allocator. 0 on success. */
 int ga_kstuff_mmap(pid_t pid, size_t len, intptr_t *out_addr);
 
+/* Checks the bridge against a target by asking it something harmless, so a
+ * failing mmap can be told apart from a failing bridge. */
+void ga_kstuff_diagnose(pid_t pid);
+
 int ga_kstuff_munmap(pid_t pid, intptr_t addr, size_t len);
 int ga_kstuff_mprotect(pid_t pid, intptr_t addr, size_t len, int prot);

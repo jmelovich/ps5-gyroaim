@@ -21,12 +21,38 @@ ShadowMount+ 1.7beta4.
 - Reads the real gyro and writes the stick, with a self test that proves the
   arithmetic without anyone holding the controller.
 - Gyro to right or left stick, gated on a trigger, a button, or always.
-- Sensitivity, inversion, axis choice, trigger threshold and stick deadzone,
-  all live from the portal, saved to `/data/gyroaim/settings.txt`.
+- **Works in camera-velocity space**, so the game's own deadzone and response
+  curve are inverted rather than fought. This is the part that makes aiming
+  feel proportional instead of mushy near the centre and twitchy further out.
+- Sensitivity in camera degrees per degree of hand movement, with optional
+  acceleration between a slow and a fast value.
+- Drift calibration that learns the gyro's resting offset while the pad is
+  still, and knows not to trust a window in which you were aiming.
+- Tiered smoothing and tightening, so fine aim is steady and flicks are not.
+- Flick carry, so a fast movement that asks for more than full deflection
+  still completes instead of being clipped.
+- Player space, taking yaw around gravity, so a tilted pad still turns level.
+- Turn-rate rumble, and per-game profiles chosen automatically.
+- 33 settings, all live from the portal.
 - Installs and removes cleanly; the game keeps running either way.
 
-Not built yet: the response curve, smoothing and drift calibration; rumble
-feedback; per-title profiles; the touchpad as a target; the native app.
+Not built yet: the touchpad as a target, and the native app.
+
+## Tuning it
+
+Two numbers matter more than the rest, and both describe the game rather than
+you:
+
+- **Full-stick turn rate.** Hold the stick fully right, time one complete
+  revolution, and enter the degrees per second. Until this is right,
+  sensitivity is an arbitrary number; once it is, sensitivity 1.0 means the
+  camera turns exactly as far as your hands do.
+- **Stick deadzone and response curve.** Most games ignore the first 10 to 20
+  percent of travel and bend what is left. Get these close and small
+  movements move the camera by the right amount.
+
+The live panel shows your hand's rate, the camera speed being asked for, and
+the deflection being sent, which makes the effect of each setting visible.
 
 ## Build and run
 

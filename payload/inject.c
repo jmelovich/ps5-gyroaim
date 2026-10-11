@@ -19,6 +19,7 @@
 #include "kstuff.h"
 #include "log.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -34,6 +35,30 @@
 #define WRITE_CHUNK   0x800u
 
 #define ALIGN_UP(v, a) (((v) + (a) - 1) & ~((a) - 1))
+
+/* Where a process's injected mapping is remembered between service restarts.
+ *
+ * Removing hooks deliberately leaves the mapping in place, because a game
+ * thread can be inside the stub and pulling the code out from under it would
+ * crash the game. That means each install would otherwise map another 32 KB
+ * inside the game, and a title's memory budget is finite: a long-running game
+ * eventually refuses the allocation and the transform cannot be installed at
+ * all. Remembering the address lets a restarted service point the slots back
+ * at the code already sitting there. */
+#define MAP_RECORD_DIR "/data/gyroaim"
+
+static void map_record_path(pid_t pid, char *out, size_t n)
+{
+    snprintf(out, n, "%s/map-%d.txt", MAP_RECORD_DIR, (int)pid);
+}
+
+void ga_inject_forget(pid_t pid)
+{
+    char path[128];
+
+    map_record_path(pid, path, sizeof(path));
+    unlink(path);
+}
 
 /* Which stub serves which function, and which register carries the shared
  * page: the stub takes it as the argument after the real ones, so it lands in
@@ -128,6 +153,67 @@ static int write_slot(pid_t pid, intptr_t slot, uint64_t value, uint32_t prot)
     return rc;
 }
 
+static void map_record_save(const ga_inject_t *in)
+{
+    char path[128];
+    FILE *f;
+
+    map_record_path(in->pid, path, sizeof(path));
+    if (!(f = fopen(path, "w")))
+        return;
+    fprintf(f, "code=0x%lx\nargs=0x%lx\nlen=%zu\n",
+            (long)in->code, (long)in->args, in->code_len);
+    fclose(f);
+}
+
+/* Returns 0 if a mapping from an earlier install is still usable. The stub
+ * bytes are compared before trusting it, so a rebuilt service never reuses
+ * somebody else's or an older build's code. */
+static int map_record_reuse(pid_t pid, const void *stub, size_t stub_len,
+                            ga_inject_t *out)
+{
+    char path[128];
+    FILE *f;
+    long code = 0, args = 0;
+    size_t len = 0;
+
+    map_record_path(pid, path, sizeof(path));
+    if (!(f = fopen(path, "r")))
+        return -1;
+    if (fscanf(f, "code=0x%lx args=0x%lx len=%zu", &code, &args, &len) != 3) {
+        fclose(f);
+        unlink(path);
+        return -1;
+    }
+    fclose(f);
+
+    if (!code || !args || !len) {
+        unlink(path);
+        return -1;
+    }
+
+    if (verify_game(pid, (intptr_t)code, stub, stub_len) != 0) {
+        ga_log("inject: the mapping remembered at 0x%lx no longer holds this "
+               "build's code; mapping fresh memory", code);
+        unlink(path);
+        return -1;
+    }
+
+    uint32_t header[2] = { 0, 0 };
+    if (kernel_proc_copyout(pid, (intptr_t)args, header, sizeof(header)) != 0 ||
+        header[0] != GA_MAGIC) {
+        unlink(path);
+        return -1;
+    }
+
+    out->pid = pid;
+    out->code = (intptr_t)code;
+    out->args = (intptr_t)args;
+    out->code_len = len;
+    ga_log("inject: reusing the mapping already in this game at 0x%lx", code);
+    return 0;
+}
+
 int ga_inject_install(const ga_target_t *t, const ga_slot_t *slots,
                       unsigned slot_count, ga_inject_t *out)
 {
@@ -165,43 +251,54 @@ int ga_inject_install(const ga_target_t *t, const ga_slot_t *slots,
     size_t args_len = ALIGN_UP(sizeof(ga_args_t), TARGET_PAGE);
 
     intptr_t map = 0;
-    if (ga_kstuff_mmap(t->pid, code_len + args_len, &map) != 0)
-        return -1;
+    int fresh = map_record_reuse(t->pid, (const void *)begin, stub_len,
+                                 out) != 0;
 
-    out->code = map;
-    out->code_len = code_len;
-    out->args = map + (intptr_t)code_len;
-
-    ga_log("inject: %zu bytes of code at 0x%lx, shared page at 0x%lx",
-           stub_len, (long)out->code, (long)out->args);
-
-    if (write_game(t->pid, out->code, (const void *)begin, stub_len) != 0 ||
-        verify_game(t->pid, out->code, (const void *)begin, stub_len) != 0) {
-        ga_log("inject: copying the stub failed");
-        goto fail_unmap;
+    if (fresh) {
+        if (ga_kstuff_mmap(t->pid, code_len + args_len, &map) != 0)
+            return -1;
+        out->code = map;
+        out->code_len = code_len;
+        out->args = map + (intptr_t)code_len;
+        ga_log("inject: %zu bytes of code at 0x%lx, shared page at 0x%lx",
+               stub_len, (long)out->code, (long)out->args);
     }
 
-    /* One gateway per stub, and remember which kinds we can serve. */
+    /* Gateway addresses follow from the code base, so they are the same
+     * whether the code was just written or was already there. */
     intptr_t gw_for_kind[GA_FN_COUNT];
     memset(gw_for_kind, 0, sizeof(gw_for_kind));
-    for (unsigned i = 0; i < N_STUBS; i++) {
-        intptr_t gw = out->code + (intptr_t)gw_off + (intptr_t)(i * GATEWAY_SIZE);
-        intptr_t stub = out->code +
-                        (intptr_t)((uintptr_t)k_stubs[i].stub - begin);
-        uint8_t bytes[GATEWAY_SIZE];
+    for (unsigned i = 0; i < N_STUBS; i++)
+        gw_for_kind[k_stubs[i].kind] =
+            out->code + (intptr_t)gw_off + (intptr_t)(i * GATEWAY_SIZE);
 
-        if (make_gateway(bytes, gw, out->args, stub, k_stubs[i].reg) != 0 ||
-            write_game(t->pid, gw, bytes, sizeof(bytes)) != 0) {
-            ga_log("inject: gateway %u failed", i);
+    if (fresh) {
+        if (write_game(t->pid, out->code, (const void *)begin, stub_len) != 0 ||
+            verify_game(t->pid, out->code, (const void *)begin,
+                        stub_len) != 0) {
+            ga_log("inject: copying the stub failed");
             goto fail_unmap;
         }
-        gw_for_kind[k_stubs[i].kind] = gw;
-    }
 
-    if (ga_kstuff_mprotect(t->pid, out->code, code_len,
-                           PROT_READ | PROT_EXEC) != 0) {
-        ga_log("inject: could not make the stub executable");
-        goto fail_unmap;
+        for (unsigned i = 0; i < N_STUBS; i++) {
+            intptr_t gw = gw_for_kind[k_stubs[i].kind];
+            intptr_t stub = out->code +
+                            (intptr_t)((uintptr_t)k_stubs[i].stub - begin);
+            uint8_t bytes[GATEWAY_SIZE];
+
+            if (make_gateway(bytes, gw, out->args, stub,
+                             k_stubs[i].reg) != 0 ||
+                write_game(t->pid, gw, bytes, sizeof(bytes)) != 0) {
+                ga_log("inject: gateway %u failed", i);
+                goto fail_unmap;
+            }
+        }
+
+        if (ga_kstuff_mprotect(t->pid, out->code, code_len,
+                               PROT_READ | PROT_EXEC) != 0) {
+            ga_log("inject: could not make the stub executable");
+            goto fail_unmap;
+        }
     }
 
     /* The shared page, with the transform parked. */
@@ -276,6 +373,7 @@ int ga_inject_install(const ga_target_t *t, const ga_slot_t *slots,
 
     out->hooked = done;
     out->installed = 1;
+    map_record_save(out);
     free(a);
     ga_log("inject: installed, %u slot(s) redirected, transform parked",
            done);
@@ -287,8 +385,10 @@ fail_rollback:
                    a->hook_prot[i]);
     free(a);
 fail_unmap:
-    /* Nothing in the game points at the mapping yet, so it is safe to drop. */
-    ga_kstuff_munmap(t->pid, map, code_len + args_len);
+    /* Only safe to drop a mapping we just made: nothing in the game points at
+     * it yet. A reused one may still be referenced. */
+    if (fresh && map)
+        ga_kstuff_munmap(t->pid, map, code_len + args_len);
     memset(out, 0, sizeof(*out));
     return -1;
 }

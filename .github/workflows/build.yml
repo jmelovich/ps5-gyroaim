@@ -1,0 +1,156 @@
+name: build
+
+# GyroAim - build and release automation.
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Builds the service and the control panel on every push and pull request, and
+# when a v* tag arrives, publishes the same archive as a GitHub release so
+# nobody has to build and upload one by hand.
+#
+#   tools/release.sh 0.6.0 && git push origin main v0.6.0
+#
+# The release is created as a draft: read the notes, then press Publish.
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Pinned, not ubuntu-latest. The title's build pipeline wants clang-18 by
+    # name, and 24.04 is the newest image that carries it; later images ship
+    # only clang 20 and up. A moving label would swap the compiler out from
+    # under the build without this file changing. Bump deliberately.
+    runs-on: ubuntu-24.04
+    outputs:
+      title-id: ${{ steps.identity.outputs.title-id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The payload SDK brings its own clang; host clang is for the title's
+      # pipeline, and Pillow is for the icon checks in tools/check-release.sh.
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build clang-18 lld llvm python3 python3-pil unzip wget curl
+
+      # Both setup scripts are pure downloads, verified by SHA-256 or pinned to
+      # a commit, so a cached copy cannot go stale. The key covers the scripts
+      # that pin them.
+      - name: Cache the SDK and the title pipeline
+        uses: actions/cache@v4
+        with:
+          path: .deps
+          key: deps-${{ runner.os }}-${{ hashFiles('tools/setup-deps.sh', 'tools/setup-app-deps.sh') }}
+
+      - name: Fetch dependencies
+        run: |
+          tools/setup-deps.sh
+          tools/setup-app-deps.sh
+
+      # The catalog reads contentVersion from the committed param.json at the
+      # release tag, and a console compares it with the installed copy's.
+      # Stamping it here would leave the committed value behind, so the listing
+      # would show a release no console offers as an update. tools/release.sh
+      # bumps and commits it before tagging; this only proves they agree.
+      - name: Check the versions match the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: tools/set-content-version.sh --check "$GITHUB_REF_NAME"
+
+      # Builds the service, runs the host tests, assembles and signs the title,
+      # then checks it against the catalog's rules.
+      - name: Build and check
+        run: make release
+
+      - name: Read the title id
+        id: identity
+        run: |
+          title_id=$(python3 -c \
+            'import json;print(json.load(open("app/sce_sys/param.json"))["titleId"])')
+          echo "title-id=$title_id" >> "$GITHUB_OUTPUT"
+          ls -l "app/dist/$title_id.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.identity.outputs.title-id }}
+          path: app/dist/${{ steps.identity.outputs.title-id }}.zip
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write        # the default is read-only; creating a release needs this
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # git describe needs the tag history for the compare link
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.title-id }}
+          path: app/dist
+
+      # A tag can arrive two ways and both have to work.
+      #
+      #   tools/release.sh then git push   the tag arrives with no release, so
+      #                                    create a draft to review.
+      #   GitHub's "Draft a new release"   publishing in the web interface makes
+      #                                    the tag and the release together, so
+      #                                    the release already exists by now.
+      #                                    Creating it again would fail and the
+      #                                    archive would never be attached, so
+      #                                    upload into it and leave the notes
+      #                                    the author wrote alone.
+      - name: Attach the build to its release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIP: app/dist/${{ needs.build.outputs.title-id }}.zip
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+              echo "release $GITHUB_REF_NAME already exists; uploading into it"
+              gh release upload "$GITHUB_REF_NAME" \
+                  "$ZIP" LICENSE THIRD_PARTY_NOTICES.md --clobber
+              exit 0
+          fi
+
+          previous=$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null || true)
+          {
+              printf '## Installing\n\n'
+              printf 'Unpack `%s` into `/data/homebrew/` on the console, then launch\n' \
+                  "$(basename "$ZIP")"
+              printf '**GyroAim** from the home screen and choose **start the service**.\n'
+              printf 'The app carries the service inside it, so there is nothing else to install.\n\n'
+              printf '## What you need\n\n'
+              printf -- '- A jailbroken PS5 with an ELF loader on port 9021 and kstuff loaded.\n'
+              printf -- '- ShadowMount+ to register the title, and new enough to mount `/data`\n'
+              printf '  if you want the service to start with the console.\n\n'
+              printf '## Settings\n\n'
+              printf 'The panel shows a QR code for the settings page. Open it on a phone on the\n'
+              printf 'same network and tune the aiming while you play.\n\n'
+              if [[ -n $previous ]]; then
+                  printf '## Changes\n\n'
+                  printf 'https://github.com/%s/compare/%s...%s\n\n' \
+                      "$GITHUB_REPOSITORY" "$previous" "$GITHUB_REF_NAME"
+              fi
+              printf 'Experimental homebrew. It writes into a running game: save first.\n'
+              printf 'Not affiliated with Sony. Contains no licensed code.\n'
+          } > notes.md
+
+          gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file notes.md \
+              "$ZIP" LICENSE THIRD_PARTY_NOTICES.md

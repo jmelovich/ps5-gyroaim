@@ -34,6 +34,8 @@ release: clean
 	@$(MAKE) --no-print-directory -C tests check
 	@$(MAKE) --no-print-directory -C app dist
 	@echo
+	@tools/check-release.sh
+	@echo
 	@echo "archive: app/dist/$(TITLE).zip"
 	@du -h app/dist/$(TITLE).zip | cut -f1 | sed 's/^/size:    /'
 	@sha256sum app/dist/$(TITLE).zip | cut -d" " -f1 | sed 's/^/sha256:  /'

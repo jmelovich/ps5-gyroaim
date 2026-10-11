@@ -133,19 +133,31 @@ turn the in-game stick deadzone as low as it goes, pick a linear response
 curve, turn off stick acceleration, and set sensitivity high enough that the
 camera is not the limit.
 
+## Releasing
+
+```sh
+tools/release.sh 0.6.0
+git push origin main v0.6.0
+```
+
+That builds, tests, checks the package against the catalog's rules, stamps the
+version in the three places it lives, commits and tags. GitHub then assembles
+the title and opens a draft release with the archive attached.
+[docs/RELEASING.md](docs/RELEASING.md) has the details, including why the
+version has to be committed before the tag.
+
 ## Publishing it
 
 The control panel is a normal native title, so it can be listed in the
 [PS5 homebrew catalog](https://github.com/blackbearreloaded/ps5-homebrew-catalog)
-and installed from a store with one button. Two things that listing needs
-beyond the usual record:
+and installed from a store with one button. `tools/check-release.sh` applies
+the catalog's rules to the built package, and runs as part of `make release`.
 
-- A GitHub release with `app/dist/PPSA99510.zip` attached, and its SHA-256 in
-  the record.
-- The bundled service approved by a maintainer. The catalog's scan flags any
-  app that ships a payload running outside the sandbox, and approved ones are
-  listed by hash in `helpers/approved.json`, as ProsperoStore's own helpers
-  are. That is a review step, not a code change.
+One thing the listing needs beyond the usual record: the bundled service
+approved by a maintainer. The catalog's scan flags any app shipping a payload
+that runs outside the sandbox, and approved ones are listed by hash, as
+ProsperoStore's own helpers are. That is a review step, not a code change.
+[docs/RELEASING.md](docs/RELEASING.md) has the record template.
 
 ## Honest limits
 

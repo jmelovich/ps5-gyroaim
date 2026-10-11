@@ -30,9 +30,9 @@ CFLAGS  := -Wall -Wextra -Werror -O2 -g -std=gnu11 -fPIC \
 
 # The SDK wrapper already supplies crt1.o, -lc, -lkernel_web and the Sce
 # dependencies; kernel_*/klog_* live in crt1.o.
-LDFLAGS := -lpthread -ldl
+LDFLAGS := -lScePad -lSceUserService -lpthread -ldl
 
-SRC := main.c log.c proc.c
+SRC := main.c log.c proc.c pad.c hook.c
 OBJ := $(SRC:%.c=build/%.o)
 
 .PHONY: all clean deploy

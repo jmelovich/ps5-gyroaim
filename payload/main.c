@@ -8,6 +8,8 @@
  * game coming and going.
  */
 #include "log.h"
+#include "hook.h"
+#include "pad.h"
 #include "proc.h"
 
 #include <errno.h>
@@ -193,6 +195,11 @@ int main(void)
 
     ga_log("ready; portal port %d held, watching for a game", GYROAIM_PORT);
 
+    /* The service cannot open the pad itself: scePadOpen is refused outside
+     * a registered pad client, which is why the transform has to live inside
+     * the game. Left in as a one-line check, not a data source. */
+    ga_pad_probe(1);
+
     while (!g_quit) {
         pid_t found[4];
         unsigned n = ga_proc_find(GAME_PROC, found, 4);
@@ -209,6 +216,21 @@ int main(void)
             if (ga_proc_title_id(game, title) != 0)
                 snprintf(title, sizeof(title), "none");
             ga_log("game started: %s, pid %d", title, (int)game);
+
+            /* libScePad is loaded a moment after the process appears. */
+            ga_target_t target;
+            int inspected = -1;
+            for (int tries = 0; tries < 40 && !g_quit; tries++) {
+                inspected = ga_hook_inspect(game, &target);
+                if (inspected == 0)
+                    break;
+                usleep(250000);
+            }
+            if (inspected != 0) {
+                ga_log("could not resolve libScePad in pid %d after 10 s",
+                       (int)game);
+                ga_hook_probe_modules(game);
+            }
         } else if (n == 0 && game != -1) {
             ga_log("game stopped: %s, pid %d", title, (int)game);
             game = -1;

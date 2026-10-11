@@ -2,7 +2,7 @@
 # compiler, so they run anywhere and need no console.
 CC      ?= cc
 CFLAGS  := -Wall -Wextra -O1 -g -std=gnu11
-BIN     := curve_test transform_test
+BIN     := curve_test transform_test qr_test
 
 .PHONY: all clean check
 
@@ -15,9 +15,13 @@ transform_test: transform_test.c ../payload/config.c ../payload/log.c \
                 ../payload/stub.c
 	$(CC) $(CFLAGS) -o $@ $^ -lm
 
+qr_test: qr_test.c ../app/src/vendor/qrcodegen.c
+	$(CC) $(CFLAGS) -o $@ $^
+
 check: all
 	./curve_test
 	./transform_test
+	./qr_test
 
 clean:
-	rm -f $(BIN)
+	rm -f $(BIN) qr-sample.pgm qr-sample.png

@@ -64,17 +64,47 @@ Both run on the host with no console. One checks the response-curve tables are
 genuine inverses; the other runs the injected transform itself against a
 stand-in pad, which is the only practical way to test sign conventions.
 
+## The two pieces
+
+**The service** is a payload. It does the work, runs as root outside any
+sandbox, and survives game launches.
+
+**The control panel** is a native title, `PPSA99510`. It cannot do the
+service's job, because launching a game tears a title down, so instead it
+installs the service, starts and stops it, says whether it is running, and
+puts a QR code on screen so a phone can reach the settings. Closing the panel
+leaves the service running.
+
+The panel ships the service inside its own package, so it works on a console
+that has never had either.
+
 ## Build and run
 
+The control panel, which bundles the service:
+
 ```sh
-tools/setup-deps.sh                     # fetches the pinned payload SDK
-make -C payload deploy PS5_HOST=<ip>    # builds and sends it to the loader
+tools/setup-deps.sh                     # the payload SDK
+tools/setup-app-deps.sh                 # the title pipeline and QR encoder
+make -C app deploy PS5_HOST=<ip>        # builds both, installs the title
 ```
 
-The console needs an ELF loader on port 9021 and kstuff loaded.
+Launch GyroAim from the console's home screen and choose **start the
+service**. Everything after that is the panel or the phone.
 
-To start it at boot, put `gyroaim.elf` in `/data/pldmgr/payloads/gyroaim/`
-and add that filename to `/data/pldmgr/autoload.txt`.
+The service on its own, if you would rather not install a title:
+
+```sh
+make -C payload deploy PS5_HOST=<ip>    # straight to the ELF loader
+```
+
+The console needs an ELF loader on port 9021 and kstuff loaded. The panel says
+so plainly if kstuff is missing, since the transform cannot be installed
+without it.
+
+**Starting with the console** is a button in the panel. It copies the payload
+to `/data/pldmgr/payloads/gyroaim/` and adds one line to
+`/data/pldmgr/autoload.txt`, leaving every other payload alone. It needs
+ShadowMount+ new enough to mount `/data` into a title, which the panel checks.
 
 ## Using it
 

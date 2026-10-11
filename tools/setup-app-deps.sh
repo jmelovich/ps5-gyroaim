@@ -46,4 +46,22 @@ for f in demo_renderer.cpp demo_renderer.hpp; do
     cp "$bp/src/$f" "$root/app/src/vendor/$f"
 done
 
-echo "app assets and vendored renderer ready"
+# The QR encoder. Writing Reed-Solomon by hand would be a liability for no
+# gain; this is Project Nayuki's, MIT licensed, pinned by content hash.
+qr_tag="v1.8.0"
+declare -A qr_hashes=(
+    [qrcodegen.c]="300eff07ee25baaa7578f20284411638154716379437391e7e689c0e6ce81403"
+    [qrcodegen.h]="e82df4bff37d18b5863b9e7486fe6bda1b6cda8c3b9ecebfec473907265cb589"
+)
+for f in qrcodegen.c qrcodegen.h; do
+    dest="$root/app/src/vendor/$f"
+    if [[ ! -f $dest ]]; then
+        curl -fsSL -o "$dest.download" \
+            "https://raw.githubusercontent.com/nayuki/QR-Code-generator/$qr_tag/c/$f"
+        printf '%s  %s\n' "${qr_hashes[$f]}" "$dest.download" | \
+            sha256sum --check --strict
+        mv "$dest.download" "$dest"
+    fi
+done
+
+echo "app assets, renderer and QR encoder ready"

@@ -182,3 +182,42 @@ files. Touching a header rebuilds everything that includes it.
 Any build that shares a struct between code compiled into two different
 contexts needs this. There is no runtime check that would have caught it,
 because both halves were individually self-consistent.
+
+## What a title can and cannot do
+
+Measured while building the control panel.
+
+**Works from inside the sandbox**, no elevation of any kind:
+
+- Plain BSD sockets. Connecting to `127.0.0.1:9021` and writing a payload is
+  how the panel starts the service; the homebrew catalog documents this as a
+  standard route out of the sandbox and much of the catalog uses it.
+- Reading `/app0`, and reading and writing `/data`, including creating
+  directories under `/data/pldmgr/payloads` and appending to `autoload.txt`.
+  All of those are world-writable. `/data` is only visible because
+  ShadowMount+ mounts it; check for it rather than assuming.
+
+**Faults on an unresolved address:** anything living in
+`libScePosixForWebKit`, which a native title never loads. `sceNetCtlGetInfo`
+is one, and `getaddrinfo` and friends are others per the boilerplate's own
+notes. The symptom is a page fault on a read instruction, with no useful
+message.
+
+To get the console's own address without it: point a UDP socket at a
+documented test address and ask `getsockname` which local address the kernel
+would use. Nothing is sent, because connecting a datagram socket only picks a
+route. Format the result by hand rather than with `inet_ntop`, which is one
+more symbol that may not be there.
+
+`assert()` lowers to `__assert`, which the console does not provide, so a
+vendored library that asserts will not link. A small stand-in that logs and
+stops beats compiling assertions out.
+
+**The service must skip the panel's own title.** Every title is `eboot.bin`,
+so the control panel looks exactly like a game and the transform was duly
+installed into it. Holding the activation button would then steer its menu
+with the gyro.
+
+Nothing on the console reads a title's stderr. The panel logs to the kernel
+log with `sceKernelDebugOutText`, which is the only way to see what a title is
+doing from another machine.

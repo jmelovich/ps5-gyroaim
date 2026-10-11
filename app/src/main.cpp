@@ -16,6 +16,10 @@
 #include "service.hpp"
 #include "vendor/demo_renderer.hpp"
 
+extern "C" {
+#include "vendor/qrcodegen.h"
+}
+
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
@@ -154,6 +158,8 @@ void shout(char *text)
             *at = static_cast<char>(*at - 'a' + 'A');
 }
 
+void qr_prepare(const char *text);   /* defined with the code screen below */
+
 #if GA_PANEL_SELFTEST
 /* Exercises everything the panel does that could fail inside the sandbox:
  * writing where pldmgr looks, editing its list, and handing the payload to
@@ -177,6 +183,15 @@ void selftest()
     bool off = gyroaim::disable_autostart(why, sizeof(why));
     panel_log("[GATEST] disable autostart: %d (%s)", off, why);
     panel_log("[GATEST] still listed: %d", gyroaim::autostart_enabled());
+
+    char url[64];
+    if (address[0]) {
+        std::snprintf(url, sizeof(url), "HTTP://%s:%d", address,
+                      gyroaim::portal_port);
+        qr_prepare(url);
+    } else {
+        panel_log("[GATEST] no address, so no settings code to build");
+    }
 
     bool sent = gyroaim::start_service(why, sizeof(why));
     panel_log("[GATEST] hand payload to the loader: %d (%s)", sent, why);
@@ -275,10 +290,65 @@ void *worker(void *)
     return nullptr;
 }
 
+/* ---- the settings code -------------------------------------------------- *
+ *
+ * The panel cannot show the settings while a game is running, because a title
+ * is torn down when a game launches. A phone can, so the panel's job is to
+ * get the address onto the phone without anyone typing it.
+ *
+ * The code is encoded once and kept, rather than rebuilt every frame: the address
+ * only changes when the network does.
+ */
+char qr_text[64] = "";
+uint8_t qr_code[qrcodegen_BUFFER_LEN_MAX];
+bool qr_valid = false;
+
+void qr_prepare(const char *text)
+{
+    static uint8_t scratch[qrcodegen_BUFFER_LEN_MAX];
+
+    if (!std::strcmp(qr_text, text))
+        return;
+    std::snprintf(qr_text, sizeof(qr_text), "%s", text);
+    qr_valid = qrcodegen_encodeText(qr_text, scratch, qr_code,
+                                    qrcodegen_Ecc_MEDIUM,
+                                    qrcodegen_VERSION_MIN,
+                                    qrcodegen_VERSION_MAX,
+                                    qrcodegen_Mask_AUTO, true);
+    panel_log("[GAPANEL] settings code for %s: %s", qr_text,
+              qr_valid ? "ready" : "failed");
+}
+
+void qr_draw(Canvas &canvas, unsigned left, unsigned top, unsigned target)
+{
+    if (!qr_valid)
+        return;
+
+    const unsigned quiet = 4;
+    const unsigned modules = static_cast<unsigned>(qrcodegen_getSize(qr_code));
+    const unsigned across = modules + quiet * 2;
+    unsigned scale = target / across;
+
+    if (scale < 1)
+        scale = 1;
+    const unsigned side = across * scale;
+
+    /* Quiet zone included: a code without one often will not scan. */
+    canvas.rectangle(left, top, side, side, rgb(255, 255, 255));
+    for (unsigned y = 0; y < modules; y++)
+        for (unsigned x = 0; x < modules; x++)
+            if (qrcodegen_getModule(qr_code, static_cast<int>(x),
+                                    static_cast<int>(y)))
+                canvas.rectangle(left + (quiet + x) * scale,
+                                 top + (quiet + y) * scale, scale, scale,
+                                 rgb(0, 0, 0));
+}
+
 /* ---- the menu ----------------------------------------------------------- */
 
 constexpr int menu_items = 4;
 int selected = 0;
+bool showing_code = false;
 
 void activate(int item)
 {
@@ -295,6 +365,9 @@ void activate(int item)
     case 2:
         queued = autostart ? action_autostart_off : action_autostart_on;
         break;
+    case 3:
+        showing_code = true;
+        break;
     default:
         break;
     }
@@ -304,14 +377,18 @@ void handle_input()
 {
     uint32_t pressed = pad_pressed();
 
+    if (showing_code) {
+        if (pressed & (button_circle | button_cross))
+            showing_code = false;
+        return;
+    }
+
     if (pressed & (button_down | button_right))
         selected = (selected + 1) % menu_items;
     if (pressed & (button_up | button_left))
         selected = (selected + menu_items - 1) % menu_items;
     if (pressed & button_cross)
         activate(selected);
-    if (pressed & button_circle)
-        queued = action_none;
 }
 
 /* ---- drawing ------------------------------------------------------------ */
@@ -340,6 +417,38 @@ void draw(Canvas &canvas) noexcept
 
     canvas.clear(back);
     canvas.rectangle(0, 0, 1920, 8, accent);
+
+    char url[64];
+    if (addr[0])
+        std::snprintf(url, sizeof(url), "HTTP://%s:%d", addr,
+                      gyroaim::portal_port);
+    else
+        url[0] = '\0';
+
+    if (showing_code) {
+        label(canvas, 96, 72, "SETTINGS ON YOUR PHONE", 4, ink);
+        if (url[0] && now.reachable) {
+            qr_prepare(url);
+            qr_draw(canvas, 96, 190, 620);
+            label(canvas, 790, 260, "SCAN THIS WITH YOUR PHONE", 3, ink);
+            label(canvas, 790, 320, "OR OPEN", 2, dim);
+            label(canvas, 790, 366, url, 3, accent);
+            label(canvas, 790, 440, "THE PHONE MUST BE ON THE SAME", 2, dim);
+            label(canvas, 790, 478, "NETWORK AS THIS CONSOLE.", 2, dim);
+            label(canvas, 790, 540, "SETTINGS CHANGE WHILE YOU PLAY.", 2, dim);
+            label(canvas, 790, 578, "THERE IS NO PASSWORD: ANYONE ON", 2, dim);
+            label(canvas, 790, 616, "YOUR NETWORK CAN OPEN IT.", 2, dim);
+        } else if (!now.reachable) {
+            label(canvas, 96, 240, "THE SERVICE IS NOT RUNNING.", 3, bad);
+            label(canvas, 96, 300, "START IT FIRST.", 2, dim);
+        } else {
+            label(canvas, 96, 240, "THIS CONSOLE HAS NO NETWORK ADDRESS.", 3,
+                  bad);
+            label(canvas, 96, 300, "CONNECT IT TO YOUR NETWORK.", 2, dim);
+        }
+        label(canvas, 96, 980, "CIRCLE: BACK", 2, dim);
+        return;
+    }
 
     label(canvas, 96, 72, "GYROAIM", 7, ink);
     label(canvas, 96, 150, "CONTROL PANEL", 2, dim);
@@ -373,9 +482,8 @@ void draw(Canvas &canvas) noexcept
           (now.reachable && !now.kstuff) ? bad : dim);
     y += 38;
 
-    if (addr[0] && now.reachable)
-        std::snprintf(line, sizeof(line), "SETTINGS: HTTP://%s:%d", addr,
-                      gyroaim::portal_port);
+    if (url[0] && now.reachable)
+        std::snprintf(line, sizeof(line), "SETTINGS: %s", url);
     else if (now.reachable)
         std::snprintf(line, sizeof(line),
                       "SETTINGS: PORT %d ON THIS CONSOLE", gyroaim::portal_port);

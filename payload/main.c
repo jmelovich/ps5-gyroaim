@@ -230,6 +230,16 @@ int main(void)
                 ga_log("could not resolve libScePad in pid %d after 10 s",
                        (int)game);
                 ga_hook_probe_modules(game);
+            } else {
+                ga_slot_t slots[GA_MAX_SLOTS];
+                int n = ga_hook_find_slots(&target, slots, GA_MAX_SLOTS);
+                if (n <= 0) {
+                    ga_log("no slots from the relocation table; scanning "
+                           "the game's own modules by value instead");
+                    n = ga_hook_scan_slots(&target, slots, GA_MAX_SLOTS);
+                }
+                ga_log("usable pad slots: %d", n);
+
             }
         } else if (n == 0 && game != -1) {
             ga_log("game stopped: %s, pid %d", title, (int)game);

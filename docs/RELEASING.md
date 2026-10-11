@@ -50,24 +50,22 @@ release is already published, so it is worth knowing beforehand.
 
 ## Listing it in the homebrew catalog
 
-A record at `apps/PPSA99510.json` in
-[the catalog](https://github.com/blackbearreloaded/ps5-homebrew-catalog):
+Generate the record rather than typing it, so the digest and the URLs cannot
+be mistyped:
 
-```json
-{
-  "titleid": "PPSA99510",
-  "name": "GyroAim",
-  "kind": "app",
-  "description": "Gyro aiming in any game, with the controller's gyroscope driving the stick and the settings on your phone.",
-  "license": "GPL-3.0",
-  "author": "jmelovich",
-  "version": "0.6.0",
-  "source_repo": "https://github.com/jmelovich/ps5-gyroaim",
-  "artifact_url": "https://github.com/jmelovich/ps5-gyroaim/releases/download/v0.6.0/PPSA99510.zip",
-  "sha256": "<printed by make release>",
-  "icon_url": "https://raw.githubusercontent.com/jmelovich/ps5-gyroaim/v0.6.0/app/sce_sys/icon0.png"
-}
+```sh
+tools/catalog-record.sh v1.0.0
 ```
+
+It reads the title id from `param.json` and the digest from the published
+release, and prints `apps/PPSA99510.json` ready to paste into a fork of
+[the catalog](https://github.com/blackbearreloaded/ps5-homebrew-catalog).
+
+Two things have to be true first, and the script says so if they are not:
+
+- **The release is published, not a draft.** The catalog cannot download a
+  draft's asset.
+- **The repository is public.** `source_repo` and `icon_url` have to resolve.
 
 `version` must be the tag or the tag without its leading `v`. Pin `icon_url` to
 the tag so the icon cannot change under the listing; the catalog also looks for

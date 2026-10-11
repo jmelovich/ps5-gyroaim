@@ -32,12 +32,12 @@ CFLAGS  := -Wall -Wextra -Werror -O2 -g -std=gnu11 -fPIC \
 # dependencies; kernel_*/klog_* live in crt1.o.
 LDFLAGS := -lScePad -lSceUserService -lpthread -ldl
 
-SRC := main.c log.c proc.c pad.c hook.c
+SRC := main.c log.c proc.c pad.c hook.c kstuff.c stub.c inject.c
 OBJ := $(SRC:%.c=build/%.o)
 
-.PHONY: all clean deploy
+.PHONY: all clean deploy check-stub
 
-all: $(ELF)
+all: $(ELF) check-stub
 
 $(ELF): $(OBJ)
 	$(CC) -o $@ $(OBJ) $(LDFLAGS)
@@ -47,6 +47,23 @@ build/%.o: %.c | build
 
 build:
 	@mkdir -p build
+
+# The stub block is copied into another process, so it must not reference
+# anything outside itself. Any relocation in its section means a reference to
+# .rodata or to another symbol, which would point into open space once copied.
+# Most often it is a float literal, or a negation pulling in a sign mask.
+check-stub: build/stub.o
+	@tool=$$(command -v llvm-objdump || command -v objdump) || \
+	    { echo "need objdump or llvm-objdump to check the stub" >&2; exit 1; }; \
+	relocs=$$($$tool -r $< \
+	    | awk '/RELOCATION RECORDS FOR \[.text.gastub\]/{f=1;next} \
+	           /^RELOCATION RECORDS/{f=0} \
+	           f && /R_X86_64/{print}'); \
+	if [ -n "$$relocs" ]; then \
+	    echo "stub block has external references:"; echo "$$relocs"; \
+	    exit 1; \
+	fi; \
+	echo "stub block is self-contained"
 
 clean:
 	rm -rf build $(ELF)

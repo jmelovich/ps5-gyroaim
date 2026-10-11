@@ -70,3 +70,38 @@ writing one means raising the protection, writing, and restoring it.
 
 Measured against PPSA99350: three slots, contiguous, for the three pad
 functions that title actually calls.
+
+## The pad sample layout, settled on hardware
+
+Reading real data out of a running game resolved the one ambiguity in the
+public sources. At rest the controller reports:
+
+    offset 0x1c   -0.043  0.968  0.226     magnitude 0.995
+    offset 0x28   -0.001  0.001  0.000
+
+So `0x1c` is acceleration in g and `0x28` is angular velocity in rad/s,
+matching the official SDK order. The source that swaps them is wrong.
+
+## Writing code into a game
+
+The stub is copied byte for byte into the target, so it must reference
+nothing outside itself. The compiler will quietly break this: writing `-x` on
+a float makes it load a sign mask from a constant pool in `.rodata`, reached
+by a RIP-relative load that points into open space once copied. Float and
+string literals do the same.
+
+`make check-stub` fails the build if the stub's section has any relocation at
+all, which is the only reliable way to catch it. Axis inversion is folded
+into the sign of the sensitivity so the stub never negates a float.
+
+Other measured details:
+
+- Remote `mmap` goes through kstuff, since kernel read and write cannot
+  create a mapping. Target page size is 0x4000.
+- Import slots are `PROT_READ`, so writing one means raising protection,
+  writing, and restoring it.
+- The mapping is deliberately never unmapped on removal: a game thread can be
+  inside the stub, and pulling the code out from under it would crash the
+  game. It dies with the process anyway.
+- `kernel_proc_copyin` is used in small chunks and read back to verify, since
+  a partial transfer would leave half a function in the game.

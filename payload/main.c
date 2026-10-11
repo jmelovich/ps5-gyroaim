@@ -6,6 +6,7 @@
  * launches. When a game starts it resolves the game's pad entry points, finds
  * the import slots that reach them, and installs the transform.
  */
+#include "config.h"
 #include "hook.h"
 #include "inject.h"
 #include "kstuff.h"
@@ -13,6 +14,7 @@
 #include "pad.h"
 #include "proc.h"
 #include "stub.h"
+#include "web.h"
 
 #include <errno.h>
 #include <netinet/in.h>
@@ -152,40 +154,6 @@ static int claim_single_instance(void)
     return -1;
 }
 
-/* ---- settings --------------------------------------------------------- */
-
-/* Phase 2 defaults: gyro to the right stick while the left trigger is held.
- *
- * Sensitivity is in stick counts per rad/s and carries the axis direction,
- * because the stub must not negate a float. With 127 counts of travel, 40
- * means full deflection at about 3 rad/s, or 180 degrees a second of hand
- * movement.
- *
- * The signs follow the PlayStation convention of a right-handed frame with Y
- * up: positive Y is turning left, positive X is pitching up. Aiming left is a
- * smaller stick X, and the stub adds its offset, so yaw needs a negative
- * sensitivity. Aiming up is a smaller stick Y and the stub subtracts, so
- * pitch stays positive. Both are easy to flip once a human has felt it.
- */
-static void default_settings(ga_args_t *s)
-{
-    memset(s, 0, sizeof(*s));
-    s->magic = GA_MAGIC;
-    s->version = GA_LAYOUT_VERSION;
-    s->enabled = 1;
-    s->target = GA_TARGET_RIGHT_STICK;
-    s->activation = GA_ACT_TRIGGER;
-    s->trigger_right = 0;              /* L2 */
-    s->trigger_threshold = 64;         /* about a quarter press */
-    s->activation_mask = GA_BTN_L2;
-    s->axis_yaw = 1;
-    s->axis_pitch = 0;
-    s->sens_yaw = -40.0f;
-    s->sens_pitch = 40.0f;
-    s->stick_deadzone = 20;
-    s->settings_seq = 1;
-}
-
 /* ---- self test -------------------------------------------------------- *
  *
  * Whether the stub writes the stick cannot be judged from a controller lying
@@ -196,6 +164,7 @@ static void default_settings(ga_args_t *s)
  *
  * This proves the whole path end to end without anyone touching the pad.
  */
+__attribute__((unused))
 static void selftest(const ga_inject_t *inj, const ga_args_t *base)
 {
     ga_args_t probe = *base;
@@ -292,6 +261,22 @@ static int attach(pid_t game, const char *title, ga_inject_t *inj)
     return 0;
 }
 
+/* Keeps the portal's view of the world current. */
+static void publish_status(ga_web_state_t *web, int attached,
+                           const char *title, const char *status,
+                           const ga_args_t *live, int have_live)
+{
+    pthread_mutex_lock(&web->lock);
+    web->attached = attached;
+    snprintf(web->title, sizeof(web->title), "%s", title ? title : "");
+    snprintf(web->status, sizeof(web->status), "%s", status);
+    if (live && have_live) {
+        web->live = *live;
+        web->have_live = 1;
+    }
+    pthread_mutex_unlock(&web->lock);
+}
+
 int main(void)
 {
     pid_t game = -1;
@@ -299,12 +284,16 @@ int main(void)
     ga_inject_t inj;
     ga_args_t settings;
     ga_args_t telemetry;
+    ga_web_state_t web;
     int attached = 0;
     int64_t next_report = 0;
     int64_t ms = 0;
 
     memset(&inj, 0, sizeof(inj));
-    default_settings(&settings);
+    memset(&settings, 0, sizeof(settings));
+    memset(&web, 0, sizeof(web));
+    pthread_mutex_init(&web.lock, NULL);
+    ga_config_defaults(&web.cfg);
 
     ga_log_open();
     ga_log("GyroAim starting (portal port %d)", GYROAIM_PORT);
@@ -331,16 +320,34 @@ int main(void)
     }
     write_pidfile();
 
+    if (ga_config_load(&web.cfg, GA_CONFIG_PATH) == 0)
+        ga_log("settings loaded from %s", GA_CONFIG_PATH);
+    else if (ga_config_save(&web.cfg, GA_CONFIG_PATH) == 0)
+        ga_log("wrote default settings to %s", GA_CONFIG_PATH);
+    ga_config_to_args(&web.cfg, &settings);
+
+    ga_web_start(portal, &web);
+
     if (!ga_kstuff_available()) {
         ga_log("kstuff remote syscalls are unavailable, so the transform "
                "cannot be installed; watching only");
     }
 
     ga_log("ready; watching for a game");
+    publish_status(&web, 0, "", "waiting for a game to start", NULL, 0);
 
     while (!g_quit) {
         pid_t found[4];
         unsigned n = ga_proc_find(GAME_PROC, found, 4);
+
+        /* Settings changed in the portal: fold them in and remember them. */
+        pthread_mutex_lock(&web.lock);
+        if (web.cfg_dirty) {
+            ga_config_to_args(&web.cfg, &settings);
+            web.cfg_dirty = 0;
+            ga_config_save(&web.cfg, GA_CONFIG_PATH);
+        }
+        pthread_mutex_unlock(&web.lock);
 
         if (n == 1 && found[0] != game) {
             game = found[0];
@@ -348,12 +355,18 @@ int main(void)
                 snprintf(title, sizeof(title), "none");
             ga_log("game started: %s, pid %d", title, (int)game);
 
+            publish_status(&web, 0, title, "attaching", NULL, 0);
             attached = attach(game, title, &inj) == 0;
             if (attached) {
                 ga_inject_publish(&inj, &settings);
-                selftest(&inj, &settings);
+                if (GA_SELFTEST)
+                    selftest(&inj, &settings);
                 ga_log("%s: transform live", title);
+                publish_status(&web, 1, title, "transform live", NULL, 0);
                 next_report = 0;
+            } else {
+                publish_status(&web, 0, title,
+                               "could not attach to this game", NULL, 0);
             }
         } else if (n == 0 && game != -1) {
             ga_log("game stopped: %s, pid %d", title, (int)game);
@@ -362,6 +375,8 @@ int main(void)
             attached = 0;
             game = -1;
             title[0] = '\0';
+            publish_status(&web, 0, "", "waiting for a game to start",
+                           NULL, 0);
         }
 
         if (attached) {
@@ -370,10 +385,14 @@ int main(void)
             if (ga_inject_publish(&inj, &settings) != 0) {
                 ga_log("%s: lost contact with the shared page", title);
                 attached = 0;
-            } else if (ms >= next_report &&
-                       ga_inject_read(&inj, &telemetry) == 0) {
-                report(&telemetry);
-                next_report = ms + REPORT_MS;
+                publish_status(&web, 0, title,
+                               "lost contact with the transform", NULL, 0);
+            } else if (ga_inject_read(&inj, &telemetry) == 0) {
+                publish_status(&web, 1, title, "transform live", &telemetry, 1);
+                if (ms >= next_report) {
+                    report(&telemetry);
+                    next_report = ms + REPORT_MS;
+                }
             }
         }
 

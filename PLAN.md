@@ -5,7 +5,13 @@ DualSense's gyroscope into whatever control the game actually reads, usually the
 right stick, while a condition you choose is met, usually the left trigger being
 held. Configurable from a phone while the game is running.
 
-Status: **plan, awaiting approval.** Nothing is implemented yet.
+Status: **phases 0 to 2 done and verified on hardware, plus the portal.**
+Decisions settled: GPL-3.0-or-later with PoorDS4's bridge technique credited,
+portal on port 6080, native app last and recast as the delivery route, so it
+can be installed from a store and install the service itself.
+
+See README.md for what works today and docs/CONSOLE_NOTES.md for what the
+hardware taught us.
 
 ---
 
@@ -280,8 +286,9 @@ so a bad setting is always recoverable without the console's UI.
    measured degrees per second and emitted stick values make tuning fast. Default
    port **8080**, chosen to avoid Puckbridge's 8090 and ShadowMount+'s 10101. No
    authentication, and the docs will say so plainly: anyone on the LAN can open it.
-2. **Native app**, Phase 4. A thin title that talks to the same JSON API over
-   localhost. The build pipeline is already proven next door in steamlink-ps5:
+2. **Native app**, Phase 4, and really the delivery route: something you can
+   install from a store like ProsperoStore, which then installs the service
+   payload for you. It also talks to the same JSON API over localhost. The build pipeline is already proven next door in steamlink-ps5:
    `prospero-clang`, `ps5-native-tool` to link and fake-sign, `sce_sys/param.json`
    with `requiredSystemSoftwareVersion` zeroed, an icon, CPU rendering presented
    through `libSceVideoOut`. Title ID **PPSA99510**, free in the homebrew catalog.
@@ -378,10 +385,13 @@ Builds stay on this console. Nothing redistributable gets published.
 
 ## 14. Decisions I would like confirmed
 
-1. **Vendor PoorDS4's bridge under GPL-3.0** as recommended, or write the hook
-   machinery from scratch for a freer licence?
-2. **Portal on port 8080**, no authentication, LAN-visible. Fine?
-3. **Phase order.** Phase 1 is pure risk reduction and produces nothing you can
-   use. Worth it, in my view, because it is the only honest way to find out
-   whether the gyro is even reachable before building a pipeline on top of it.
-4. **Native app last.** The portal does everything it does, sooner.
+All four are settled:
+
+1. **GPL-3.0-or-later**, with the bridge technique credited. As it turned out
+   no code was vendored: the hook path here is an independent implementation
+   that uses the same documented mechanism, plus a value-scan path the
+   original does not have.
+2. **Portal on port 6080**, no authentication, LAN-visible.
+3. **Phase 1 first.** It earned its place: it found that the service cannot
+   read the pad itself, which would have invalidated a simpler design.
+4. **Native app last**, as the delivery route.

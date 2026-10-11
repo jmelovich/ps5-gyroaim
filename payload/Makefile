@@ -22,17 +22,22 @@ ELF := gyroaim.elf
 # console is running.
 GYROAIM_PORT ?= 6080
 
+# The self test briefly feeds the transform an artificial turn to prove it
+# writes the stick. That nudges the camera, so keep it off for anything but
+# deliberate validation.
+GA_SELFTEST ?= 0
+
 # The injected stub is copied byte for byte into another process, so it must be
 # position independent.
 CFLAGS  := -Wall -Wextra -Werror -O2 -g -std=gnu11 -fPIC \
            -fno-stack-protector \
-           -D__PROSPERO__ -DGYROAIM_PORT=$(GYROAIM_PORT)
+           -D__PROSPERO__ -DGYROAIM_PORT=$(GYROAIM_PORT) -DGA_SELFTEST=$(GA_SELFTEST)
 
 # The SDK wrapper already supplies crt1.o, -lc, -lkernel_web and the Sce
 # dependencies; kernel_*/klog_* live in crt1.o.
 LDFLAGS := -lScePad -lSceUserService -lpthread -ldl
 
-SRC := main.c log.c proc.c pad.c hook.c kstuff.c stub.c inject.c
+SRC := main.c log.c proc.c pad.c hook.c kstuff.c stub.c inject.c config.c web.c
 OBJ := $(SRC:%.c=build/%.o)
 
 .PHONY: all clean deploy check-stub

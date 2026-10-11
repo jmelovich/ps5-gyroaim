@@ -124,6 +124,20 @@ turn the in-game stick deadzone as low as it goes, pick a linear response
 curve, turn off stick acceleration, and set sensitivity high enough that the
 camera is not the limit.
 
+## Publishing it
+
+The control panel is a normal native title, so it can be listed in the
+[PS5 homebrew catalog](https://github.com/blackbearreloaded/ps5-homebrew-catalog)
+and installed from a store with one button. Two things that listing needs
+beyond the usual record:
+
+- A GitHub release with `app/dist/PPSA99510.zip` attached, and its SHA-256 in
+  the record.
+- The bundled service approved by a maintainer. The catalog's scan flags any
+  app that ships a payload running outside the sandbox, and approved ones are
+  listed by hash in `helpers/approved.json`, as ProsperoStore's own helpers
+  are. That is a review step, not a code change.
+
 ## Honest limits
 
 The camera can never turn faster than the game's own maximum stick speed, and

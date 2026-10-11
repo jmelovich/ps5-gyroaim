@@ -244,6 +244,39 @@ static INLINE void to_camera(const ga_args_t *a, float yaw, float pitch,
     *cp = pitch * sens * a->vert_scale;
 }
 
+/* Rumble.
+ *
+ * The DualSense has no rotary motors, only voice coils, so scePadSetVibration
+ * does nothing at all until the pad is put into legacy motor emulation with
+ * scePadSetVibrationMode(handle, 2). That is why an earlier version produced
+ * no rumble whatsoever however the settings were changed.
+ *
+ * The mode is re-applied every couple of seconds while rumble is wanted,
+ * because the game sets the mode too and whichever call came last wins.
+ */
+static INLINE void set_rumble(ga_args_t *a, int32_t handle, uint32_t level,
+                              uint64_t ts)
+{
+    typedef int32_t (*vib_t)(int32_t, const uint8_t *);
+    typedef int32_t (*mode_t)(int32_t, int32_t);
+
+    if (!a->orig[GA_FN_SET_VIBRATION])
+        return;
+
+    if (a->orig[GA_FN_SET_VIBRATION_MODE] &&
+        (a->rumble_mode_ts == 0 || ts - a->rumble_mode_ts > 2000000u)) {
+        a->rumble_mode_ts = ts;
+        ((mode_t)(uintptr_t)a->orig[GA_FN_SET_VIBRATION_MODE])(handle, 2);
+    }
+
+    uint8_t motors[2];
+    motors[0] = (uint8_t)level;
+    motors[1] = (uint8_t)level;
+    a->rumble_last_level = level;
+    a->rumble_last_ts = ts;
+    ((vib_t)(uintptr_t)a->orig[GA_FN_SET_VIBRATION])(handle, motors);
+}
+
 static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
 {
     uint32_t age = __atomic_add_fetch(&a->age, 1u, __ATOMIC_RELAXED);
@@ -312,6 +345,10 @@ static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
             a->ring[n][0] = a->k.zero;
             a->ring[n][1] = a->k.zero;
         }
+        /* Letting go must stop the motors, or they stay on at whatever level
+         * the last aiming frame asked for. */
+        if (a->rumble_last_level && fresh)
+            set_rumble(a, handle, 0, ts);
         __atomic_add_fetch(&a->sample_seq, 1u, __ATOMIC_RELAXED);
         return;
     }
@@ -423,22 +460,16 @@ static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
     /* Rumble that rises with how hard the camera is being turned. Rate
      * limited, and only sent when the level actually changes, because this
      * calls back into Sony's library from the game's own thread. */
-    if (a->rumble && a->orig[GA_FN_SET_VIBRATION] && fresh) {
-        uint32_t level = (uint32_t)(frac * a->rumble_scale * a->k.counts);
+    if (a->rumble && fresh) {
+        uint32_t level = (uint32_t)(frac * a->rumble_scale * a->k.full);
         if (level > 255u)
             level = 255u;
-        uint64_t since = ts - a->rumble_last_ts;
         uint32_t gap = a->rumble_period_ms * 1000u;
         if (level != a->rumble_last_level &&
-            (a->rumble_last_ts == 0 || since >= gap)) {
-            typedef int32_t (*vib_t)(int32_t, const uint8_t *);
-            uint8_t motors[2];
-            motors[0] = (uint8_t)level;
-            motors[1] = (uint8_t)level;
-            a->rumble_last_level = level;
-            a->rumble_last_ts = ts;
-            ((vib_t)(uintptr_t)a->orig[GA_FN_SET_VIBRATION])(handle, motors);
-        }
+            (a->rumble_last_ts == 0 || ts - a->rumble_last_ts >= gap))
+            set_rumble(a, handle, level, ts);
+    } else if (!a->rumble && a->rumble_last_level && fresh) {
+        set_rumble(a, handle, 0, ts);      /* switched off mid-turn */
     }
 
     __atomic_add_fetch(&a->applied, 1u, __ATOMIC_RELAXED);
@@ -457,6 +488,10 @@ STUB int32_t ga_stub_read_state(int32_t handle, uint8_t *data, ga_args_t *a)
     int32_t r = ((fn_t)(uintptr_t)a->orig[GA_FN_READ_STATE])(handle, data);
 
     __atomic_add_fetch(&a->calls, 1u, __ATOMIC_RELAXED);
+    if (usable(a)) {
+        a->last_result = r;
+        a->last_handle = handle;
+    }
     if (r == 0 && data && usable(a))
         transform(a, data, handle);
     return r;

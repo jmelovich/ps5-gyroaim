@@ -15,6 +15,7 @@ typedef struct {
     ga_config_t cfg;
     int         cfg_dirty;      /* portal changed something */
     int         save_as_title;  /* portal asked to keep these per game */
+    int         reload_request; /* portal asked to reread the file */
     char        path[GA_PATH_MAX];   /* where settings are being kept */
 
     ga_args_t   live;           /* last telemetry read */

@@ -1,0 +1,349 @@
+<!doctype html>
+<meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>
+<meta name='color-scheme' content='light dark'>
+<title>GyroAim</title>
+<style>
+:root{
+--bg:#f4f4f6; --fg:#17171b; --mut:#62626d; --card:#fff; --line:#e3e3e8;
+--acc:#2f6fed; --ok:#1a9850; --warn:#d9730d; --ink:#8a8a96;
+}
+@media(prefers-color-scheme:dark){:root{
+--bg:#101013; --fg:#ececf1; --mut:#9b9ba6; --card:#1b1b21; --line:#2c2c35;
+--acc:#6b96ff; --ok:#56c271; --warn:#e8913c; --ink:#6e6e7a;
+}}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0 auto;padding:14px 14px calc(28px + env(safe-area-inset-bottom));
+background:var(--bg);color:var(--fg);max-width:780px;
+font:16px/1.45 system-ui,-apple-system,'Segoe UI',sans-serif}
+h1{font-size:20px;margin:0}
+.top{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.top .where{color:var(--mut);font-size:13px}
+#status{display:flex;align-items:center;gap:8px;padding:9px 12px;border-radius:10px;
+background:var(--card);border:1px solid var(--line);font-size:13.5px;
+color:var(--mut);margin-bottom:12px}
+#dot{width:9px;height:9px;border-radius:50%;background:var(--ink);flex:0 0 auto}
+#dot.live{background:var(--ok)}
+#dot.aim{background:var(--acc)}
+#dot.bad{background:var(--warn)}
+section{background:var(--card);border:1px solid var(--line);border-radius:12px;
+margin-bottom:10px;overflow:hidden}
+summary{padding:11px 14px;font-size:13px;font-weight:600;color:var(--mut);
+text-transform:uppercase;letter-spacing:.05em;cursor:pointer;list-style:none;
+display:flex;align-items:center;justify-content:space-between}
+summary::-webkit-details-marker{display:none}
+summary::after{content:'';width:7px;height:7px;border-right:2px solid var(--mut);
+border-bottom:2px solid var(--mut);transform:rotate(45deg);transition:transform .15s}
+details[open]>summary::after{transform:rotate(225deg)}
+.body{padding:2px 14px 12px}
+.row{display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:center;
+padding:9px 0;border-top:1px solid var(--line)}
+.row:first-child{border-top:0}
+.row .lbl{font-size:14.5px}
+.row .hint{display:block;color:var(--mut);font-size:12px;margin-top:1px}
+.row input[type=range]{grid-column:1/-1;width:100%;margin:2px 0 0;
+accent-color:var(--acc);height:26px}
+.row .num{width:5.4em;text-align:right;font-variant-numeric:tabular-nums}
+input[type=number],select{background:var(--bg);color:var(--fg);
+border:1px solid var(--line);border-radius:8px;padding:7px 8px;font:inherit;
+font-size:15px}
+input[type=number]{-moz-appearance:textfield}
+select{max-width:11em}
+@media(min-width:580px){
+.row{grid-template-columns:minmax(11em,1.1fr) 1.6fr auto}
+.row input[type=range]{grid-column:2;margin:0}
+}
+.sw{position:relative;width:46px;height:28px;flex:0 0 auto}
+.sw input{position:absolute;opacity:0;width:100%;height:100%;margin:0}
+.sw span{position:absolute;inset:0;background:var(--line);border-radius:999px;
+transition:background .15s}
+.sw span::after{content:'';position:absolute;top:3px;left:3px;width:22px;height:22px;
+background:#fff;border-radius:50%;transition:transform .15s;
+box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.sw input:checked+span{background:var(--acc)}
+.sw input:checked+span::after{transform:translateX(18px)}
+.live{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:7px}
+.cell{background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:7px 9px}
+.cell b{display:block;font-size:10.5px;color:var(--mut);text-transform:uppercase;
+letter-spacing:.04em;font-weight:600;margin-bottom:1px}
+.cell span{font-variant-numeric:tabular-nums;font-size:15px}
+.charts{display:grid;grid-template-columns:1fr;gap:10px}
+@media(min-width:580px){.charts{grid-template-columns:1fr 1fr}}
+.chart{background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:8px}
+.chart h3{margin:0 0 5px;font-size:12px;color:var(--mut);font-weight:600;
+text-transform:uppercase;letter-spacing:.04em}
+.chart canvas{width:100%;height:auto;display:block;touch-action:none}
+.chart p{margin:5px 0 0;font-size:11.5px;color:var(--mut);line-height:1.35}
+button{background:var(--acc);color:#fff;border:0;border-radius:9px;
+padding:11px 15px;font:inherit;font-weight:600;font-size:15px}
+button.flat{background:var(--bg);color:var(--fg);border:1px solid var(--line)}
+.btns{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.note{color:var(--mut);font-size:12.5px;margin:8px 0 0}
+.on{color:var(--ok);font-weight:600}
+.warn{color:var(--warn);font-weight:600}
+.off{color:var(--mut)}
+</style>
+<div class='top'><h1>GyroAim</h1><span class='where' id='where'></span></div>
+<div id='status'><i id='dot'></i><span id='statusText'>connecting</span></div>
+<section><details open><summary>Live</summary><div class='body'>
+<div class='live'>
+<div class='cell'><b>State</b><span id='v_state'>-</span></div>
+<div class='cell'><b>Hand</b><span id='v_hand'>-</span></div>
+<div class='cell'><b>Camera</b><span id='v_cam'>-</span></div>
+<div class='cell'><b>Deflection</b><span id='v_defl'>-</span></div>
+<div class='cell'><b>Stick in</b><span id='v_in'>-</span></div>
+<div class='cell'><b>Stick out</b><span id='v_out'>-</span></div>
+<div class='cell'><b>Trigger</b><span id='v_trig'>-</span></div>
+<div class='cell'><b>Drift</b><span id='v_drift'>-</span></div>
+</div>
+<div class='charts' style='margin-top:10px'>
+<div class='chart'><h3>The game's stick curve</h3>
+<canvas id='c_curve' width='320' height='220'></canvas>
+<p>What the game does with a stick value. The dot is where you are now, the
+trail is the last few seconds.</p></div>
+<div class='chart'><h3>Hand speed to camera speed</h3>
+<canvas id='c_sens' width='320' height='220'></canvas>
+<p>Degrees per second in, degrees per second out. Flat means no acceleration.
+The dashed line is the game's ceiling.</p></div>
+</div>
+</div></details></section>
+<div id='form'></div>
+<section><details><summary>Profile</summary><div class='body'>
+<div class='btns'>
+<button id='saveTitle'>Keep these for this game</button>
+<button class='flat' id='reload'>Reload from disk</button>
+</div>
+<p class='note' id='pathNote'></p>
+</div></details></section>
+<p class='note'>No password. Anyone on this network can change these settings.</p>
+<script>
+var SPEC=[
+['Aim',1,[
+['enabled','On','bool','Master switch for the whole transform.'],
+['target','Controls','sel',[[0,'Right stick'],[1,'Left stick']]],
+['sens_min','Sensitivity','num',0,8,0.05,'Camera degrees per degree of hand movement. 1.0 is one to one.'],
+['sens_max','Sensitivity when fast','num',0,8,0.05,'Set equal to the above for no acceleration.'],
+['sens_lo_rate','Slow below','num',0,200,1,'deg/s'],
+['sens_hi_rate','Fast above','num',0,400,1,'deg/s'],
+['vert_scale','Vertical scale','num',0.1,3,0.05,'Pitch relative to yaw.'],
+['invert_yaw','Invert left and right','bool'],
+['invert_pitch','Invert up and down','bool']]],
+["The game's camera",1,[
+['max_turn','Full-stick turn rate','num',20,1200,5,'Hold the stick fully right, time one full revolution, enter deg/s. Everything else depends on this.'],
+['game_deadzone','Stick deadzone','num',0,0.6,0.01,'Fraction of travel the game ignores at the centre.'],
+['game_outer','Outer deadzone','num',0,0.3,0.01,'Fraction ignored at the edge.'],
+['game_power','Response curve','num',0.5,4,0.05,'1.0 is linear. Higher bends the curve toward fine control near the centre.']]],
+['When it applies',0,[
+['activation','Condition','sel',[[0,'Always'],[2,'Trigger held'],[1,'Button held'],[3,'Never']]],
+['trigger_right','Trigger','sel',[[0,'L2'],[1,'R2']]],
+['trigger_threshold','Trigger threshold','num',1,255,1,'Out of 255. The button keeps its normal job in the game.']]],
+['Steadiness',0,[
+['tighten','Ignore below','num',0,40,0.5,'deg/s. Pulls hand tremor toward zero instead of cutting it off.'],
+['smooth_rate','Smooth below','num',0,80,0.5,'deg/s. Only slow movement is averaged, so flicks stay instant.'],
+['carry_cap','Flick carry','num',0,1.5,0.05,'How much of an over-fast flick is held back and delivered just after.']]],
+['The physical stick',0,[
+['merge_stick','Combine with the stick','bool','Lets the stick and the gyro steer together.'],
+['stick_deadzone','Stick counts to ignore','num',0,120,1,'How far the stick must move before it counts as being used.']]],
+['Axes',0,[
+['space','Gyro space','sel',[[0,'As held'],[1,'Level with the world']]],
+['axis_yaw','Yaw from','sel',[[0,'Gyro X'],[1,'Gyro Y'],[2,'Gyro Z']]],
+['axis_pitch','Pitch from','sel',[[0,'Gyro X'],[1,'Gyro Y'],[2,'Gyro Z']]],
+['axis_roll','Roll from','sel',[[0,'Gyro X'],[1,'Gyro Y'],[2,'Gyro Z']]]]],
+['Drift',0,[
+['calibrate','Learn the resting offset','bool','Watches the pad while it is still and subtracts what it reads then.']]],
+['Rumble',0,[
+['rumble','Rumble while turning','bool','Switches the pad to legacy motor emulation, which can change how the game’s own haptics feel.'],
+['rumble_scale','Strength','num',0,1.5,0.05],
+['rumble_period_ms','Minimum interval','num',16,400,4,'milliseconds']]]
+];
+var K=[],META={},busy=0,pending=0,cfg=null,live=null,trail=[];
+function el(i){return document.getElementById(i)}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')}
+function build(){
+var h='';
+SPEC.forEach(function(g,gi){
+h+="<section><details"+(g[1]?' open':'')+"><summary>"+esc(g[0])+
+"</summary><div class='body'>";
+g[2].forEach(function(f){
+var k=f[0],lab=f[1],kind=f[2];K.push(k);META[k]={kind:kind};
+var hint=null;
+h+="<div class='row'><span class='lbl'>"+esc(lab);
+if(kind==='bool'){hint=f[3]}
+else if(kind==='num'){hint=f[6];META[k].step=f[5];META[k].min=f[3];META[k].max=f[4]}
+if(hint)h+="<span class='hint'>"+esc(hint)+"</span>";
+h+='</span>';
+if(kind==='bool')
+h+="<label class='sw'><input type=checkbox id='"+k+"'><span></span></label>";
+else if(kind==='sel'){
+h+="<select id='"+k+"'>";
+f[3].forEach(function(o){h+="<option value='"+o[0]+"'>"+esc(o[1])+'</option>'});
+h+='</select>'}
+else{
+h+="<input class='num' type=number id='n_"+k+"' min='"+f[3]+"' max='"+f[4]+
+"' step='"+f[5]+"'>";
+h+="<input type=range id='"+k+"' min='"+f[3]+"' max='"+f[4]+"' step='"+f[5]+"'>"}
+h+='</div>'});
+h+='</div></details></section>'});
+el('form').innerHTML=h;
+K.forEach(function(k){
+var e=el(k),n=el('n_'+k);
+if(META[k].kind==='num'){
+e.addEventListener('input',function(){n.value=e.value;put()});
+n.addEventListener('change',function(){
+var v=parseFloat(n.value);
+if(isNaN(v))v=parseFloat(e.value);
+v=Math.min(META[k].max,Math.max(META[k].min,v));
+n.value=v;e.value=v;put()});
+n.addEventListener('focus',function(){n.select()});
+}else{
+e.addEventListener('change',put)}});
+}
+function put(){
+if(busy){pending=1;return}
+busy=1;
+var q=K.map(function(k){
+var e=el(k);
+return k+'='+(e.type==='checkbox'?(e.checked?1:0):e.value)}).join('&');
+fetch('/api/set?'+q).then(function(r){return r.json()}).then(function(j){
+apply(j.config)}).catch(function(){}).then(function(){
+busy=0;if(pending){pending=0;put()}})}
+function apply(c){
+cfg=c;
+K.forEach(function(k){
+var e=el(k),n=el('n_'+k);
+if(document.activeElement===e||document.activeElement===n)return;
+if(e.type==='checkbox')e.checked=!!c[k];
+else{e.value=c[k];if(n)n.value=c[k]}})}
+function sgn(v,d){
+if(v===undefined||v===null)return '-';
+d=(d===undefined)?1:d;
+return (v<0?'':'+')+v.toFixed(d)}
+function toVel(d,dz,outer,power){
+var liv=1-dz-outer;if(liv<0.01)liv=0.01;
+var t=(d-dz)/liv;
+if(t<=0)return 0;if(t>=1)return 1;
+return Math.pow(t,power)}
+function sensAt(r,c){
+if(c.sens_hi_rate<=c.sens_lo_rate)return c.sens_min;
+var t=(r-c.sens_lo_rate)/(c.sens_hi_rate-c.sens_lo_rate);
+t=Math.max(0,Math.min(1,t));
+return c.sens_min+(c.sens_max-c.sens_min)*t}
+function px(cv){
+var r=cv.getBoundingClientRect(),dpr=window.devicePixelRatio||1;
+var w=Math.max(200,Math.round(r.width)),h=Math.round(w*0.66);
+if(cv.width!==Math.round(w*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr)}
+cv.style.height=h+'px';
+var g=cv.getContext('2d');
+g.setTransform(dpr,0,0,dpr,0,0);
+g.clearRect(0,0,w,h);
+return {g:g,w:w,h:h}}
+function frame(g,w,h,xl,yl){
+var s=getComputedStyle(document.body);
+var line=s.getPropertyValue('--line').trim();
+var mut=s.getPropertyValue('--mut').trim();
+var P={l:34,r:8,t:8,b:22};
+g.strokeStyle=line;g.lineWidth=1;
+g.strokeRect(P.l,P.t,w-P.l-P.r,h-P.t-P.b);
+g.setLineDash([2,3]);
+for(var i=1;i<4;i++){
+var y=P.t+(h-P.t-P.b)*i/4, x=P.l+(w-P.l-P.r)*i/4;
+g.beginPath();g.moveTo(P.l,y);g.lineTo(w-P.r,y);g.stroke();
+g.beginPath();g.moveTo(x,P.t);g.lineTo(x,h-P.b);g.stroke()}
+g.setLineDash([]);
+g.fillStyle=mut;g.font='10px system-ui,sans-serif';
+g.textAlign='center';g.fillText(xl,P.l+(w-P.l-P.r)/2,h-6);
+g.save();g.translate(11,P.t+(h-P.t-P.b)/2);g.rotate(-Math.PI/2);
+g.textAlign='center';g.fillText(yl,0,0);g.restore();
+return P}
+function drawCurve(){
+var cv=el('c_curve');if(!cv||!cfg)return;
+var o=px(cv),g=o.g,w=o.w,h=o.h;
+var P=frame(g,w,h,'stick deflection','camera speed');
+var X=function(t){return P.l+(w-P.l-P.r)*t};
+var Y=function(t){return (h-P.b)-(h-P.t-P.b)*t};
+var s=getComputedStyle(document.body);
+var acc=s.getPropertyValue('--acc').trim();
+var ink=s.getPropertyValue('--ink').trim();
+var warn=s.getPropertyValue('--warn').trim();
+g.fillStyle=ink;g.globalAlpha=0.18;
+g.fillRect(X(0),P.t,X(cfg.game_deadzone)-X(0),h-P.t-P.b);
+if(cfg.game_outer>0)
+g.fillRect(X(1-cfg.game_outer),P.t,X(1)-X(1-cfg.game_outer),h-P.t-P.b);
+g.globalAlpha=1;
+g.strokeStyle=acc;g.lineWidth=2;g.beginPath();
+for(var i=0;i<=100;i++){
+var d=i/100,v=toVel(d,cfg.game_deadzone,cfg.game_outer,cfg.game_power);
+if(i)g.lineTo(X(d),Y(v));else g.moveTo(X(d),Y(v))}
+g.stroke();
+if(trail.length>1){
+g.strokeStyle=warn;g.lineWidth=1.5;g.globalAlpha=0.55;g.beginPath();
+trail.forEach(function(p,i){if(i)g.lineTo(X(p[0]),Y(p[1]));else g.moveTo(X(p[0]),Y(p[1]))});
+g.stroke();g.globalAlpha=1}
+if(trail.length){
+var p=trail[trail.length-1];
+g.fillStyle=warn;g.beginPath();g.arc(X(p[0]),Y(p[1]),4.5,0,6.3);g.fill();
+g.strokeStyle='#fff';g.lineWidth=1.5;g.stroke()}}
+function drawSens(){
+var cv=el('c_sens');if(!cv||!cfg)return;
+var o=px(cv),g=o.g,w=o.w,h=o.h;
+var hiX=Math.max(60,cfg.sens_hi_rate*1.4);
+var topY=Math.max(cfg.max_turn,hiX*Math.max(cfg.sens_min,cfg.sens_max));
+var P=frame(g,w,h,'hand deg/s','camera deg/s');
+var X=function(v){return P.l+(w-P.l-P.r)*Math.min(1,v/hiX)};
+var Y=function(v){return (h-P.b)-(h-P.t-P.b)*Math.min(1,v/topY)};
+var s=getComputedStyle(document.body);
+var acc=s.getPropertyValue('--acc').trim();
+var mut=s.getPropertyValue('--mut').trim();
+var warn=s.getPropertyValue('--warn').trim();
+g.strokeStyle=mut;g.setLineDash([4,3]);g.lineWidth=1;
+g.beginPath();g.moveTo(P.l,Y(cfg.max_turn));g.lineTo(w-P.r,Y(cfg.max_turn));g.stroke();
+g.setLineDash([]);
+g.strokeStyle=acc;g.lineWidth=2;g.beginPath();
+for(var i=0;i<=100;i++){
+var r=hiX*i/100;
+if(i)g.lineTo(X(r),Y(r*sensAt(r,cfg)));else g.moveTo(X(r),Y(r*sensAt(r,cfg)))}
+g.stroke();
+if(live){
+var hr=Math.hypot(live.rate_yaw,live.rate_pitch);
+var cr=Math.hypot(live.cam_yaw,live.cam_pitch);
+g.fillStyle=warn;g.beginPath();g.arc(X(hr),Y(cr),4.5,0,6.3);g.fill();
+g.strokeStyle='#fff';g.lineWidth=1.5;g.stroke()}}
+function tick(){
+fetch('/api/state').then(function(r){return r.json()}).then(function(j){
+apply(j.config);
+live=j.live;
+el('statusText').textContent=j.status;
+el('where').textContent=j.title?('game '+j.title):'';
+el('pathNote').textContent='Settings are being kept in '+j.path;
+var d=el('dot');
+if(!j.live){d.className='';['v_state','v_hand','v_cam','v_defl','v_in','v_out',
+'v_trig','v_drift'].forEach(function(i){el(i).textContent='-'});
+trail=[];drawCurve();drawSens();return}
+var L=j.live;
+d.className=L.saturated?'bad':(L.active?'aim':'live');
+var st=el('v_state');
+st.textContent=L.saturated?'at the limit':(L.active?'aiming':'idle');
+st.className=L.saturated?'warn':(L.active?'on':'off');
+el('v_hand').textContent=sgn(L.rate_yaw)+', '+sgn(L.rate_pitch);
+el('v_cam').textContent=sgn(L.cam_yaw)+', '+sgn(L.cam_pitch);
+el('v_defl').textContent=(L.out_frac*100).toFixed(1)+'%';
+el('v_in').textContent=L.in_x+', '+L.in_y;
+el('v_out').textContent=L.out_x+', '+L.out_y;
+el('v_trig').textContent='L2 '+L.l2+'  R2 '+L.r2;
+el('v_drift').textContent=L.cal_active?'aiming':(L.cal_count+' still');
+var camFrac=cfg.max_turn>0?
+Math.min(1,Math.hypot(L.cam_yaw,L.cam_pitch)/cfg.max_turn):0;
+trail.push([Math.min(1,L.out_frac),camFrac]);
+if(trail.length>90)trail.shift();
+drawCurve();drawSens();
+}).catch(function(){
+el('dot').className='bad';
+el('statusText').textContent='no connection to the service'})}
+build();
+el('saveTitle').addEventListener('click',function(){
+fetch('/api/save?scope=title').then(tick)});
+el('reload').addEventListener('click',function(){
+fetch('/api/reload').then(tick)});
+window.addEventListener('resize',function(){drawCurve();drawSens()});
+tick();setInterval(tick,200);
+</script>

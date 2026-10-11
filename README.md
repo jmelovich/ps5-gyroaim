@@ -78,9 +78,13 @@ and add that filename to `/data/pldmgr/autoload.txt`.
 
 ## Using it
 
-Open `http://<console ip>:6080` from a phone or PC on the same network. The
-page shows live gyro rates and the stick values going in and out, so you can
-see the transform working before you can feel it.
+Open `http://<console ip>:6080` from a phone or PC on the same network.
+
+Every number has both a slider and a box you can type into, sections collapse
+so the page is not a wall of controls, and two live graphs show what is
+happening: the game's stick curve with a dot tracing where you are on it, and
+hand speed against camera speed. Between them you can see the effect of a
+setting before you can feel it.
 
 **There is no authentication.** Anyone on your network can open the portal and
 change the settings.

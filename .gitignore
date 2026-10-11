@@ -9,4 +9,4 @@ dist/
 .deps/
 
 # generated
-payload/webui_html.h
+payload/web_page.h

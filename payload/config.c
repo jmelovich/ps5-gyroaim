@@ -57,7 +57,7 @@ void ga_config_defaults(ga_config_t *c)
     c->calibrate = 1;
 
     c->rumble = 0;
-    c->rumble_scale = 0.35f;
+    c->rumble_scale = 0.6f;
     c->rumble_period_ms = 60;
 }
 
@@ -133,6 +133,7 @@ void ga_args_init_consts(ga_args_t *a)
     a->k.us_to_s = 1e-6f;
     a->k.ring_inv = 1.0f / (float)GA_RING_N;
     a->k.neg_counts = -127.0f;
+    a->k.full = 255.0f;
 }
 
 /* ---- the game's response curve ---------------------------------------- *

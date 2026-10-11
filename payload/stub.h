@@ -42,7 +42,7 @@ enum {
 };
 
 #define GA_MAGIC          0x4f524947u   /* "GYRO" */
-#define GA_LAYOUT_VERSION 3u
+#define GA_LAYOUT_VERSION 4u
 
 /* Reads without a settings refresh before the stub stops touching the data.
  * If the service dies the game goes back to normal input rather than freezing
@@ -74,6 +74,7 @@ typedef struct {
     float us_to_s;        /* 1e-6, so microseconds need no division */
     float ring_inv;       /* 1 / GA_RING_N */
     float neg_counts;     /* -127, so the stub never negates a float */
+    float full;           /* 255, full motor strength */
 } ga_consts_t;
 
 /* The page the service and the stub share. The stub references nothing
@@ -165,6 +166,7 @@ typedef struct {
     volatile uint64_t last_ts;
     volatile uint32_t rumble_last_level;
     volatile uint64_t rumble_last_ts;
+    volatile uint64_t rumble_mode_ts;
 
     /* ---- telemetry: stub writes, service reads ---- */
     volatile uint64_t calls;
@@ -185,6 +187,7 @@ typedef struct {
     volatile uint8_t  active;
     volatile uint8_t  connected;
     volatile uint8_t  saturated;
+    volatile int32_t  last_result;       /* what Sony's read returned */
     volatile uint64_t last_timestamp;
 
     /* ---- how to put the game back ---- */

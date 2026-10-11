@@ -152,3 +152,33 @@ telemetry looked wrong; it took someone holding the controller.
 Sony's read function and checks that a stick push survives the round trip
 through velocity space. Reinstating the bug makes it fail with "pushed down
 stays down: got 56, wanted 200", which is exactly what the report described.
+
+## Rumble needs legacy motor emulation
+
+`scePadSetVibration` does nothing at all on a DualSense until the pad is put
+into legacy motor emulation with `scePadSetVibrationMode(handle, 2)`. The pad
+has voice-coil actuators rather than rotary motors, and without that call the
+motor levels are simply ignored, with no error.
+
+The mode is re-applied every couple of seconds while rumble is wanted, because
+the game sets the mode too and whichever call came last wins. Switching a pad
+into this mode can change how the game's own haptics feel, which is why
+turn-rate rumble is off by default.
+
+Letting go of the trigger has to send a zero level explicitly, or the motors
+stay at whatever the last aiming frame asked for.
+
+## Make needs header dependencies
+
+A missing one cost an hour. Adding an entry to an enum in `hook.h` rebuilt the
+objects whose `.c` files had changed and left `inject.o` alone, so one half of
+the binary thought a shared struct was eight bytes shorter than the other
+half. The symptoms were absurd: a field in the telemetry read back as an
+import slot address, and an array index ran off the end of a table.
+
+`CFLAGS` now carries `-MMD -MP` and the makefile includes the generated `.d`
+files. Touching a header rebuilds everything that includes it.
+
+Any build that shares a struct between code compiled into two different
+contexts needs this. There is no runtime check that would have caught it,
+because both halves were individually self-consistent.

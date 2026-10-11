@@ -29,8 +29,12 @@ GA_SELFTEST ?= 0
 
 # The injected stub is copied byte for byte into another process, so it must be
 # position independent.
+# -MMD -MP writes a dependency file beside each object, so editing a header
+# rebuilds everything that includes it. Without this, changing a shared struct
+# rebuilt some objects and not others, and the two halves of one binary
+# disagreed about where the fields were. That is a miserable bug to find.
 CFLAGS  := -Wall -Wextra -Werror -O2 -g -std=gnu11 -fPIC \
-           -fno-stack-protector -fno-math-errno \
+           -fno-stack-protector -fno-math-errno -MMD -MP \
            -D__PROSPERO__ -DGYROAIM_PORT=$(GYROAIM_PORT) -DGA_SELFTEST=$(GA_SELFTEST)
 
 # The SDK wrapper already supplies crt1.o, -lc, -lkernel_web and the Sce
@@ -39,6 +43,7 @@ LDFLAGS := -lScePad -lSceUserService -lpthread -ldl
 
 SRC := main.c log.c proc.c pad.c hook.c kstuff.c stub.c inject.c config.c web.c
 OBJ := $(SRC:%.c=build/%.o)
+DEP := $(OBJ:.o=.d)
 
 .PHONY: all clean deploy check-stub
 
@@ -55,6 +60,14 @@ STUB_CFLAGS := $(CFLAGS) -fno-vectorize -fno-slp-vectorize
 
 build/stub.o: stub.c | build
 	$(CC) $(STUB_CFLAGS) -c -o $@ $<
+
+# The portal page is authored as real HTML and turned into a string literal,
+# which beats escaping markup by hand inside C.
+web_page.h: web/portal.html $(ROOT)/tools/gen_page.py
+	@$(ROOT)/tools/gen_page.py $< $@
+
+build/web.o: web.c web_page.h | build
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 build/%.o: %.c | build
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -80,7 +93,9 @@ check-stub: build/stub.o
 	echo "stub block is self-contained"
 
 clean:
-	rm -rf build $(ELF)
+	rm -rf build $(ELF) web_page.h
+
+-include $(DEP)
 
 deploy: $(ELF)
 	@$(ROOT)/tools/deploy.py $(PS5_HOST) $(ELF) $(PS5_PORT)

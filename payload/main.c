@@ -228,6 +228,10 @@ static void report(const ga_args_t *t)
            "  deflection %.3f",
            (double)t->rate_yaw, (double)t->rate_pitch,
            (double)t->cam_yaw, (double)t->cam_pitch, (double)t->out_frac);
+    ga_log("  rumble level %u (mode set at %llu)", t->rumble_last_level,
+           (unsigned long long)t->rumble_mode_ts);
+    ga_log("  pad read returned 0x%x, handle %d, connected %u",
+           (unsigned)t->last_result, t->last_handle, t->connected);
     ga_log("  reads %llu, applied %llu, stillness window %u sample(s)%s",
            (unsigned long long)t->calls, (unsigned long long)t->applied,
            t->cal_count, t->cal_was_active ? " (aiming, not usable)" : "");
@@ -362,6 +366,13 @@ int main(void)
             web.save_as_title = 0;
             web.cfg_dirty = 1;
             ga_log("settings will now be kept in %s", active_path);
+        }
+        if (web.reload_request) {
+            web.reload_request = 0;
+            if (ga_config_load(&web.cfg, active_path) == 0) {
+                ga_log("settings reread from %s", active_path);
+                web.cfg_dirty = 1;
+            }
         }
         if (web.cfg_dirty) {
             ga_config_to_args(&web.cfg, &settings);

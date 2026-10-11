@@ -22,6 +22,7 @@ const char *const ga_fn_names[GA_FN_COUNT] = {
     "scePadRead",
     "scePadReadExt",
     "scePadSetVibration",
+    "scePadSetVibrationMode",
     "scePadSetMotionSensorState",
     "scePadSetAngularVelocityDeadbandState",
     "scePadGetControllerInformation",

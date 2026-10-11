@@ -14,6 +14,7 @@
 #include "pad.h"
 #include "proc.h"
 #include "stub.h"
+#include "version.h"
 #include "web.h"
 
 #include <errno.h>
@@ -311,7 +312,7 @@ int main(void)
     ga_config_defaults(&web.cfg);
 
     ga_log_open();
-    ga_log("GyroAim starting (portal port %d)", GYROAIM_PORT);
+    ga_log("GyroAim %s starting (portal port %d)", GA_VERSION, GYROAIM_PORT);
 #ifdef __PROSPERO__
     uint32_t fw = kernel_get_fw_version();
     /* Packed as hex digits: 0x13200006 is 13.20. */
@@ -346,10 +347,10 @@ int main(void)
 
     ga_web_start(portal, &web);
 
-    if (!ga_kstuff_available()) {
+    web.kstuff = ga_kstuff_available();
+    if (!web.kstuff)
         ga_log("kstuff remote syscalls are unavailable, so the transform "
                "cannot be installed; watching only");
-    }
 
     ga_log("ready; watching for a game");
     publish_status(&web, 0, "", "waiting for a game to start", NULL, 0);
@@ -360,6 +361,12 @@ int main(void)
 
         /* Settings changed in the portal: fold them in and remember them. */
         pthread_mutex_lock(&web.lock);
+        if (web.quit_request) {
+            web.quit_request = 0;
+            pthread_mutex_unlock(&web.lock);
+            ga_log("the portal asked the service to stop");
+            break;      /* the shutdown path below unhooks the game */
+        }
         if (web.save_as_title && title[0]) {
             ga_config_title_path(title, active_path, sizeof(active_path));
             snprintf(web.path, sizeof(web.path), "%s", active_path);
@@ -467,7 +474,10 @@ int main(void)
         ms += TICK_US / 1000;
     }
 
-    ga_log("stopping on signal %d", (int)g_quit);
+    if (g_quit)
+        ga_log("stopping on signal %d", (int)g_quit);
+    else
+        ga_log("stopping as asked");
     if (attached && ga_proc_alive(inj.pid))
         ga_inject_remove(&inj);
     close(portal);

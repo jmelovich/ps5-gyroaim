@@ -10,6 +10,7 @@
  */
 #include "web.h"
 #include "log.h"
+#include "version.h"
 #include "web_page.h"
 
 #include <stdio.h>
@@ -76,8 +77,10 @@ static int state_json(ga_web_state_t *st, char *out, size_t n)
     ga_config_json(&st->cfg, cfg, sizeof(cfg));
 
     w = snprintf(out, n, "{\"config\":%s,\"status\":\"%s\",\"title\":\"%s\","
-                 "\"path\":\"%s\",\"live\":", cfg, st->status, st->title,
-                 st->path);
+                 "\"path\":\"%s\",\"version\":\"%s\",\"kstuff\":%d,"
+                 "\"attached\":%d,\"live\":",
+                 cfg, st->status, st->title, st->path, GA_VERSION,
+                 st->kstuff ? 1 : 0, st->attached ? 1 : 0);
     if (!st->have_live || !st->attached) {
         w += snprintf(out + w, n - (size_t)w, "null}");
         return w;
@@ -144,7 +147,8 @@ static void serve(int fd, ga_web_state_t *st)
     }
 
     if (!strcmp(path, "/api/state") || !strcmp(path, "/api/set") ||
-        !strcmp(path, "/api/save") || !strcmp(path, "/api/reload")) {
+        !strcmp(path, "/api/save") || !strcmp(path, "/api/reload") ||
+        !strcmp(path, "/api/quit")) {
         char *body = malloc(RESP_MAX);
         if (!body) {
             reply(fd, 404, "text/plain", "", 0);
@@ -157,6 +161,8 @@ static void serve(int fd, ga_web_state_t *st)
             st->save_as_title = 1;
         else if (!strcmp(path, "/api/reload"))
             st->reload_request = 1;
+        else if (!strcmp(path, "/api/quit"))
+            st->quit_request = 1;
         int n = state_json(st, body, RESP_MAX);
         pthread_mutex_unlock(&st->lock);
         reply(fd, 200, "application/json", body, (size_t)(n > 0 ? n : 0));

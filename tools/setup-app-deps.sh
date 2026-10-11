@@ -33,12 +33,11 @@ echo "boilerplate at $commit"
 # One link, so the build script sees a relative path it will accept.
 ln -sfn "$root/app" "$bp/gyroaim"
 
-# The app reuses the boilerplate's presentation assets, which carry no
-# identity of their own, and overrides only the icon and param.json.
-for f in pic0.dds pic1.dds snd0.at9 background-source.png launch-background-source.png; do
-    [[ -f "$bp/sce_sys/$f" && ! -f "$root/app/sce_sys/$f" ]] && \
-        cp "$bp/sce_sys/$f" "$root/app/sce_sys/$f"
-done
+# No presentation assets are copied from the boilerplate. Its backgrounds and
+# selection jingle are placeholders belonging to that project, and shipping
+# them under this app's name would be odd as well as adding 16 MB to a 2 MB
+# package. Both are optional: the console falls back to its own. Only the icon
+# is ours, and it lives in the repository.
 # The renderer is copied rather than linked: the build script finds sources
 # with `find -type f`, which skips symlinks.
 mkdir -p "$root/app/src/vendor"

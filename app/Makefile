@@ -40,10 +40,13 @@ service:
 dist: service
 	@test -d $(BP) || { echo "run tools/setup-app-deps.sh first" >&2; exit 2; }
 	@test -e $(BP)/gyroaim || { echo "run tools/setup-app-deps.sh first" >&2; exit 2; }
+	@# Both output directories are emptied first. Leaving them alone let an
+	@# asset removed from the package stay in the build and ship anyway.
+	@rm -rf $(BP)/dist $(ROOT)/app/dist
 	@cd $(BP) && $(BUILD_ENV) bash tools/build.sh Folder
 	@mkdir -p $(ROOT)/app/dist
-	@cp -r $(BP)/dist/$(TITLE) $(BP)/dist/$(TITLE).zip $(ROOT)/app/dist/ 2>/dev/null || true
-	@echo "title at app/dist/$(TITLE)"
+	@cp -r $(BP)/dist/$(TITLE) $(BP)/dist/$(TITLE).zip $(ROOT)/app/dist/
+	@du -sh $(ROOT)/app/dist/$(TITLE) | sed 's|$(ROOT)/|title at |'
 
 deploy: dist
 	@$(ROOT)/tools/deploy-app.py $(PS5_HOST) $(ROOT)/app/dist/$(TITLE)

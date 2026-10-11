@@ -45,8 +45,39 @@ def main() -> int:
             sent += os.path.getsize(path)
             print(f"  {remote}/{name}")
 
+    # Files on the console that the package no longer has. FTP refuses DELE
+    # here, so they cannot be removed from this script; saying so is better
+    # than leaving a stale asset to be loaded and wondered about.
+    wanted = set()
+    for dirpath, _dirs, files in os.walk(local):
+        rel = os.path.relpath(dirpath, local)
+        prefix = "" if rel == "." else rel.replace(os.sep, "/") + "/"
+        for name in files:
+            wanted.add(prefix + name)
+
+    extra = []
+    for sub in sorted({"", *(p.rsplit("/", 1)[0] + "/" for p in wanted if "/" in p)}):
+        try:
+            names = ftp.nlst(f"{base}/{sub}".rstrip("/"))
+        except ftplib.error_perm:
+            continue
+        for entry in names:
+            name = entry.rsplit("/", 1)[-1]
+            if name in (".", "..") or not name:
+                continue
+            path = sub + name
+            if path not in wanted and not any(
+                w.startswith(path + "/") for w in wanted
+            ):
+                extra.append(path)
+
     ftp.quit()
     print(f"sent {sent} bytes to {host}:{base}")
+    if extra:
+        print("left over on the console, not in this package:")
+        for path in sorted(set(extra)):
+            print(f"  {base}/{path}")
+        print("remove them with the shell client; FTP refuses deletes here")
     return 0
 
 

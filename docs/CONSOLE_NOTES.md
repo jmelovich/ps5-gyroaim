@@ -136,3 +136,19 @@ leaving no service running at all.
 
 `SO_REUSEADDR` waives only the `TIME_WAIT` wait. Two simultaneous listeners
 would need `SO_REUSEPORT`, which must never be set here.
+
+## Two coordinate systems, one subtraction
+
+A stick's vertical axis grows downward: above centre means pushed down.
+Camera pitch grows upward: positive means looking up. The transform works in
+camera space, so the physical stick's vertical contribution has to be
+**subtracted** when it is folded in, not added.
+
+Adding it inverted the right stick's up and down, and only while the gyro was
+engaged, because the sample passes through untouched otherwise. Nothing in the
+telemetry looked wrong; it took someone holding the controller.
+
+`tests/transform_test.c` now runs the stub on the host with a stand-in for
+Sony's read function and checks that a stick push survives the round trip
+through velocity space. Reinstating the bug makes it fail with "pushed down
+stays down: got 56, wanted 200", which is exactly what the report described.

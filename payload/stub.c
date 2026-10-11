@@ -326,7 +326,14 @@ static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
 
     /* What the physical stick is already asking the camera to do. Running it
      * through the game's own curve first is what lets the two be added
-     * without the curve landing on the gyro's contribution twice. */
+     * without the curve landing on the gyro's contribution twice.
+     *
+     * Mind the two coordinate systems. A stick's vertical axis grows
+     * downward, so a value above centre means pushed down; camera pitch grows
+     * upward, so positive means looking up. The stick's vertical contribution
+     * is therefore subtracted, not added. Getting this wrong inverts the
+     * right stick's up and down, but only while the gyro is engaged, since
+     * the sample passes through untouched otherwise. */
     float vx = cam_yaw, vy = cam_pitch;
     if (a->merge_stick) {
         float sx = (float)((int)data[xoff] - 128) / a->k.counts;
@@ -336,7 +343,7 @@ static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
         if (sm > dz && sm > a->k.eps) {
             float v = lut(a, a->lut_to_vel, sm) * a->max_turn;
             vx = vx + sx / sm * v;
-            vy = vy + sy / sm * v;
+            vy = vy - sy / sm * v;
         }
     }
 

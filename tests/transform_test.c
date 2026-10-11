@@ -1,0 +1,167 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+ * transform_test.c - runs the injected transform on the host.
+ *
+ * The stub is deliberately self-contained and reaches Sony's functions only
+ * through pointers on the shared page, which means it can be exercised here
+ * with a stand-in that fills a pad sample. No console needed.
+ *
+ * It exists because of a bug it would have caught. A stick's vertical axis
+ * grows downward while camera pitch grows upward, and adding one into the
+ * other inverted the right stick's up and down, but only while the gyro was
+ * engaged, so nothing else showed it.
+ */
+#include "../payload/config.h"
+#include "../payload/stub.h"
+
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+
+static int failures;
+static uint8_t g_sample[GA_PAD_SIZE];
+
+/* Stands in for scePadReadState: hands back whatever the test set up. */
+static int32_t fake_read_state(int32_t handle, uint8_t *data)
+{
+    (void)handle;
+    memcpy(data, g_sample, GA_PAD_SIZE);
+    return 0;
+}
+
+static void set_float(unsigned off, float v)
+{
+    memcpy(g_sample + off, &v, sizeof(v));
+}
+
+static void sample_reset(void)
+{
+    memset(g_sample, 0, sizeof(g_sample));
+    g_sample[GA_OFF_LX] = 128;
+    g_sample[GA_OFF_LY] = 128;
+    g_sample[GA_OFF_RX] = 128;
+    g_sample[GA_OFF_RY] = 128;
+    g_sample[GA_OFF_CONNECTED] = 1;
+    /* Gravity, so player space trusts the accelerometer. */
+    set_float(GA_OFF_ACCEL + 4, 1.0f);
+}
+
+static void sample_timestamp(uint64_t us)
+{
+    memcpy(g_sample + GA_OFF_TIMESTAMP, &us, sizeof(us));
+}
+
+static void check(const char *what, int ok, double got, double want)
+{
+    if (ok) {
+        printf("  ok   %-44s %.1f\n", what, got);
+        return;
+    }
+    printf("  FAIL %-44s got %.1f, wanted %.1f\n", what, got, want);
+    failures++;
+}
+
+/* Runs the stub over a few samples so its smoothing settles, and returns the
+ * last output. */
+static void run(ga_args_t *a, uint8_t *out_x, uint8_t *out_y)
+{
+    uint8_t buf[GA_PAD_SIZE];
+    uint64_t t = 1000000;
+
+    for (int i = 0; i < 24; i++) {
+        sample_timestamp(t);
+        t += 8000;                  /* 125 Hz, like a real pad */
+        memset(buf, 0, sizeof(buf));
+        ga_stub_read_state(1, buf, a);
+    }
+    *out_x = buf[GA_OFF_RX];
+    *out_y = buf[GA_OFF_RY];
+}
+
+static void prepare(ga_args_t *a, ga_config_t *c)
+{
+    memset(a, 0, sizeof(*a));
+    ga_args_init_consts(a);
+    ga_config_to_args(c, a);
+    a->orig[GA_FN_READ_STATE] = (uint64_t)(uintptr_t)fake_read_state;
+    a->age = 0;
+    a->cal_epoch = 1;
+}
+
+int main(void)
+{
+    ga_config_t c;
+    ga_args_t a;
+    uint8_t x, y;
+
+    ga_config_defaults(&c);
+    /* Always on, no smoothing or tightening, so each case is deterministic. */
+    c.activation = GA_ACT_ALWAYS;
+    c.tighten = 0.0f;
+    c.smooth_rate = 0.0f;
+    c.carry_cap = 0.0f;
+    c.space = GA_SPACE_LOCAL;
+    c.calibrate = 0;
+    ga_config_clamp(&c);
+
+    printf("stick passes through unchanged when the gyro is still\n");
+    sample_reset();
+    g_sample[GA_OFF_RY] = 200;            /* pushed down */
+    prepare(&a, &c);
+    run(&a, &x, &y);
+    check("pushed down stays down", y > 170 && y < 230, y, 200);
+    check("horizontal stays centred", x > 120 && x < 136, x, 128);
+
+    sample_reset();
+    g_sample[GA_OFF_RX] = 200;            /* pushed right */
+    prepare(&a, &c);
+    run(&a, &x, &y);
+    check("pushed right stays right", x > 170 && x < 230, x, 200);
+
+    sample_reset();
+    g_sample[GA_OFF_RY] = 56;             /* pushed up */
+    prepare(&a, &c);
+    run(&a, &x, &y);
+    check("pushed up stays up", y > 26 && y < 86, y, 56);
+
+    printf("the gyro moves the stick the right way\n");
+    sample_reset();
+    set_float(GA_OFF_ANGVEL + 4, 1.0f);   /* yaw: turning left */
+    prepare(&a, &c);
+    run(&a, &x, &y);
+    check("turning left aims left", x < 120, x, 100);
+
+    sample_reset();
+    set_float(GA_OFF_ANGVEL, 1.0f);       /* pitch: nose up */
+    prepare(&a, &c);
+    run(&a, &x, &y);
+    check("tilting up aims up", y < 120, y, 100);
+
+    printf("the gyro and the stick add rather than fight\n");
+    sample_reset();
+    g_sample[GA_OFF_RY] = 180;            /* already looking down */
+    set_float(GA_OFF_ANGVEL, -1.0f);      /* and tilting down too */
+    prepare(&a, &c);
+    run(&a, &x, &y);
+    check("both downward goes further down", y > 180, y, 220);
+
+    sample_reset();
+    g_sample[GA_OFF_RX] = 180;
+    set_float(GA_OFF_ANGVEL + 4, -1.0f);  /* turning right as well */
+    prepare(&a, &c);
+    run(&a, &x, &y);
+    check("both rightward goes further right", x > 180, x, 220);
+
+    printf("parking it leaves the sample alone\n");
+    sample_reset();
+    g_sample[GA_OFF_RY] = 200;
+    set_float(GA_OFF_ANGVEL + 4, 2.0f);
+    c.activation = GA_ACT_NEVER;
+    ga_config_clamp(&c);
+    prepare(&a, &c);
+    run(&a, &x, &y);
+    check("untouched while parked", y == 200 && x == 128, y, 200);
+
+    printf(failures ? "\n%d failure(s)\n" : "\nall transform checks passed\n",
+           failures);
+    return failures ? 1 : 0;
+}

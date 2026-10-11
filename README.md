@@ -54,6 +54,16 @@ you:
 The live panel shows your hand's rate, the camera speed being asked for, and
 the deflection being sent, which makes the effect of each setting visible.
 
+## Tests
+
+```sh
+make -C tests check
+```
+
+Both run on the host with no console. One checks the response-curve tables are
+genuine inverses; the other runs the injected transform itself against a
+stand-in pad, which is the only practical way to test sign conventions.
+
 ## Build and run
 
 ```sh

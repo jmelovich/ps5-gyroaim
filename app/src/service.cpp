@@ -323,6 +323,66 @@ bool disable_autostart(char *why, std::size_t why_len)
     return true;
 }
 
+/* ---- taking it off the console ----------------------------------------- */
+
+bool remove_service(bool with_settings, char *why, std::size_t why_len)
+{
+    char ignored[96];
+    Status state{};
+
+    /* The copy pldmgr starts at boot, and its line in pldmgr's list. Done
+     * first, so a failure later still leaves nothing to come back at boot. */
+    bool autostart_gone = disable_autostart(ignored, sizeof(ignored));
+
+    bool running = query(state);
+
+    if (!running && with_settings) {
+        /* Nothing is running to do the directory work, so start the copy this
+         * app carries, purely to have it remove the rest and exit. */
+        if (!start_service(ignored, sizeof(ignored))) {
+            std::snprintf(why, why_len,
+                          "removed the startup copy, but could not start the "
+                          "service to clear its settings");
+            return autostart_gone;
+        }
+        for (int i = 0; i < 20 && !running; i++) {
+            usleep(300000);
+            running = query(state);
+        }
+    }
+
+    if (!running) {
+        std::snprintf(why, why_len,
+                      "removed: it will not start with the console again");
+        return true;
+    }
+
+    char body[512];
+    int rc = http_get(with_settings ? "/api/uninstall?settings=1"
+                                    : "/api/uninstall",
+                      body, sizeof(body));
+    if (rc <= 0) {
+        std::snprintf(why, why_len,
+                      "removed the startup copy, but the running service did "
+                      "not answer");
+        return autostart_gone;
+    }
+
+    /* It unhooks any running game, clears up, and exits. */
+    for (int i = 0; i < 20; i++) {
+        usleep(300000);
+        Status after{};
+        if (!query(after)) {
+            std::snprintf(why, why_len, "removed%s",
+                          with_settings ? ", settings included"
+                                        : ", settings kept");
+            return true;
+        }
+    }
+    std::snprintf(why, why_len, "asked it to remove itself but it is still up");
+    return false;
+}
+
 /* ---- the console's address --------------------------------------------- *
  *
  * Deliberately plain sockets. The obvious call, sceNetCtlGetInfo, lives in a

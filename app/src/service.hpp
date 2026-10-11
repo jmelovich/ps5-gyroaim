@@ -48,6 +48,17 @@ bool enable_autostart(char *why, std::size_t why_len);
 bool disable_autostart(char *why, std::size_t why_len);
 bool autostart_enabled();
 
+/* Takes the service off the console.
+ *
+ * The autostart copy and pldmgr's list are handled here, because they are
+ * plain files and the panel may be the only thing running. Everything under
+ * /data/gyroaim is handled by the service itself, which runs outside the
+ * sandbox where a directory can be read; if it is not running it is started
+ * for the purpose and exits once done.
+ *
+ * `with_settings` also removes tuning and per-game profiles. */
+bool remove_service(bool with_settings, char *why, std::size_t why_len);
+
 /* The console's address on the network, for the settings page's link. */
 bool local_address(char *out, std::size_t out_len);
 } // namespace gyroaim

@@ -91,6 +91,15 @@ make -C app deploy PS5_HOST=<ip>        # builds both, installs the title
 Launch GyroAim from the console's home screen and choose **start the
 service**. Everything after that is the panel or the phone.
 
+The panel's last item, set apart at the bottom, removes the service from the
+console: it stops it, deletes the copy that starts at boot, and takes its line
+out of pldmgr's list, leaving every other payload alone. It asks first, and
+offers to keep your tuning and per-game profiles or to remove those too. The
+app always keeps its own copy, so start it again whenever you like.
+
+Removing the app itself does not remove the service, which is why that button
+exists.
+
 The service on its own, if you would rather not install a title:
 
 ```sh

@@ -4,10 +4,13 @@
 #include "config.h"
 #include "log.h"
 
+#include <dirent.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 void ga_config_defaults(ga_config_t *c)
 {
@@ -290,6 +293,98 @@ int ga_config_calibrate(ga_config_t *c, const ga_args_t *live, uint32_t *epoch)
     settled = 1;
     (*epoch)++;
     return changed;
+}
+
+/* ---- taking it off the console ------------------------------------------ */
+
+#define PLDMGR_PAYLOAD_DIR  "/data/pldmgr/payloads/gyroaim"
+#define PLDMGR_PAYLOAD_ELF  PLDMGR_PAYLOAD_DIR "/gyroaim.elf"
+#define PLDMGR_AUTOLOAD     "/data/pldmgr/autoload.txt"
+
+/* Rewrites pldmgr's list without our line, leaving every other payload
+ * exactly as it was. */
+static int drop_autoload_line(void)
+{
+    char list[8192];
+    FILE *f = fopen(PLDMGR_AUTOLOAD, "r");
+    size_t n;
+
+    if (!f)
+        return 0;
+    n = fread(list, 1, sizeof(list) - 1, f);
+    fclose(f);
+    list[n] = '\0';
+
+    if (!strstr(list, "gyroaim.elf"))
+        return 0;
+
+    if (!(f = fopen(PLDMGR_AUTOLOAD, "w"))) {
+        ga_log("uninstall: cannot rewrite %s", PLDMGR_AUTOLOAD);
+        return 0;
+    }
+    char *line = list;
+    while (line && *line) {
+        char *end = strchr(line, '\n');
+        size_t len = end ? (size_t)(end - line) : strlen(line);
+        if (len && strncmp(line, "gyroaim.elf", 11) != 0) {
+            fwrite(line, 1, len, f);
+            fputc('\n', f);
+        }
+        line = end ? end + 1 : NULL;
+    }
+    fclose(f);
+    ga_log("uninstall: removed our line from %s", PLDMGR_AUTOLOAD);
+    return 1;
+}
+
+int ga_uninstall(int remove_settings)
+{
+    int removed = 0;
+
+    if (unlink(PLDMGR_PAYLOAD_ELF) == 0) {
+        ga_log("uninstall: removed %s", PLDMGR_PAYLOAD_ELF);
+        removed++;
+    }
+    rmdir(PLDMGR_PAYLOAD_DIR);
+    removed += drop_autoload_line();
+
+    if (!remove_settings) {
+        /* The pidfile would otherwise name a process that no longer exists. */
+        if (unlink(GA_DIR "/pid") == 0)
+            removed++;
+        ga_log("uninstall: settings under %s kept", GA_DIR);
+        return removed;
+    }
+
+    /* Everything, which means reading the directory: profiles are named after
+     * whichever games were played and the mapping notes after process ids, so
+     * they cannot be listed ahead of time. */
+    DIR *dir = opendir(GA_DIR);
+    if (!dir) {
+        ga_log("uninstall: cannot read %s", GA_DIR);
+        return removed;
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(dir))) {
+        char path[GA_PATH_MAX + 64];
+
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
+        snprintf(path, sizeof(path), "%s/%s", GA_DIR, entry->d_name);
+        if (unlink(path) == 0) {
+            ga_log("uninstall: removed %s", path);
+            removed++;
+        } else {
+            ga_log("uninstall: could not remove %s", path);
+        }
+    }
+    closedir(dir);
+
+    if (rmdir(GA_DIR) == 0)
+        ga_log("uninstall: removed %s", GA_DIR);
+
+    return removed;
 }
 
 /* ---- reading and writing settings -------------------------------------- */

@@ -133,6 +133,8 @@ enum Action {
     action_stop,
     action_autostart_on,
     action_autostart_off,
+    action_remove,
+    action_remove_all,
 };
 
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -195,16 +197,63 @@ void selftest()
 
     bool sent = gyroaim::start_service(why, sizeof(why));
     panel_log("[GATEST] hand payload to the loader: %d (%s)", sent, why);
-    for (int i = 0; i < 20; i++) {
+    bool back = false;
+    for (int i = 0; i < 20 && !back; i++) {
         usleep(500000);
         gyroaim::Status s;
         if (gyroaim::query(s)) {
             panel_log("[GATEST] service answered again after %d ms, "
                       "version %s", (i + 1) * 500, s.version);
-            return;
+            back = true;
         }
     }
-    panel_log("[GATEST] service did not come back");
+    if (!back)
+        panel_log("[GATEST] service did not come back");
+
+#if GA_PANEL_SELFTEST >= 2
+    /* Removal, settings and all. Destructive, so it is behind a second level
+     * of the flag and never part of the ordinary self test. */
+    panel_log("[GATEST] removing the service, settings included");
+    bool gone = gyroaim::remove_service(true, why, sizeof(why));
+    panel_log("[GATEST] remove: %d (%s)", gone, why);
+
+    gyroaim::Status after{};
+    panel_log("[GATEST] service still answering: %d",
+              gyroaim::query(after) ? 1 : 0);
+    panel_log("[GATEST] still set to start with the console: %d",
+              gyroaim::autostart_enabled() ? 1 : 0);
+    panel_log("[GATEST] startup copy still there: %d",
+              ::stat(gyroaim::autostart_elf, &st) == 0 ? 1 : 0);
+    panel_log("[GATEST] settings directory still there: %d",
+              ::stat("/data/gyroaim", &st) == 0 ? 1 : 0);
+    panel_log("[GATEST] the app still carries its own copy: %d",
+              ::stat(gyroaim::bundled_service, &st) == 0 ? 1 : 0);
+
+    /* Second phase: install again, then remove the other way, which has to
+     * leave the tuning behind for someone who means to reinstall. */
+    panel_log("[GATEST] installing again to test keeping settings");
+    gyroaim::start_service(why, sizeof(why));
+    bool up = false;
+    for (int i = 0; i < 20 && !up; i++) {
+        usleep(500000);
+        gyroaim::Status s;
+        up = gyroaim::query(s);
+    }
+    panel_log("[GATEST] service back up: %d", up);
+    panel_log("[GATEST] settings file recreated: %d",
+              ::stat("/data/gyroaim/settings.txt", &st) == 0 ? 1 : 0);
+    gyroaim::enable_autostart(why, sizeof(why));
+
+    panel_log("[GATEST] removing the service, keeping settings");
+    gone = gyroaim::remove_service(false, why, sizeof(why));
+    panel_log("[GATEST] remove: %d (%s)", gone, why);
+    panel_log("[GATEST] service still answering: %d",
+              gyroaim::query(after) ? 1 : 0);
+    panel_log("[GATEST] startup copy still there: %d",
+              ::stat(gyroaim::autostart_elf, &st) == 0 ? 1 : 0);
+    panel_log("[GATEST] settings KEPT: %d",
+              ::stat("/data/gyroaim/settings.txt", &st) == 0 ? 1 : 0);
+#endif
 }
 #endif
 
@@ -247,6 +296,14 @@ void *worker(void *)
                 break;
             case action_autostart_off:
                 gyroaim::disable_autostart(why, sizeof(why));
+                shout(why);
+                set_message(why);
+                break;
+            case action_remove:
+            case action_remove_all:
+                set_message("REMOVING THE SERVICE");
+                gyroaim::remove_service(todo == action_remove_all, why,
+                                        sizeof(why));
                 shout(why);
                 set_message(why);
                 break;
@@ -346,9 +403,15 @@ void qr_draw(Canvas &canvas, unsigned left, unsigned top, unsigned target)
 
 /* ---- the menu ----------------------------------------------------------- */
 
-constexpr int menu_items = 4;
+constexpr int menu_items = 5;
 int selected = 0;
 bool showing_code = false;
+
+/* The remove screen. Destructive, so it sits behind a question with cancel
+ * as the resting choice. */
+bool asking_remove = false;
+int remove_choice = 2;
+constexpr int remove_choices = 3;
 
 void activate(int item)
 {
@@ -368,6 +431,10 @@ void activate(int item)
     case 3:
         showing_code = true;
         break;
+    case 4:
+        asking_remove = true;
+        remove_choice = 2;      /* cancel, until someone moves off it */
+        break;
     default:
         break;
     }
@@ -380,6 +447,24 @@ void handle_input()
     if (showing_code) {
         if (pressed & (button_circle | button_cross))
             showing_code = false;
+        return;
+    }
+
+    if (asking_remove) {
+        if (pressed & button_down)
+            remove_choice = (remove_choice + 1) % remove_choices;
+        if (pressed & button_up)
+            remove_choice = (remove_choice + remove_choices - 1) %
+                            remove_choices;
+        if (pressed & button_circle)
+            asking_remove = false;
+        if (pressed & button_cross) {
+            if (remove_choice == 0)
+                queued = action_remove;
+            else if (remove_choice == 1)
+                queued = action_remove_all;
+            asking_remove = false;
+        }
         return;
     }
 
@@ -450,6 +535,38 @@ void draw(Canvas &canvas) noexcept
         return;
     }
 
+    if (asking_remove) {
+        label(canvas, 96, 72, "REMOVE THE SERVICE", 4, ink);
+        label(canvas, 96, 170, "THIS STOPS IT AND TAKES IT OFF THE CONSOLE,", 2,
+              dim);
+        label(canvas, 96, 208, "INCLUDING STARTING WITH THE CONSOLE.", 2, dim);
+        label(canvas, 96, 266, "THIS APP KEEPS ITS OWN COPY, SO YOU CAN", 2,
+              dim);
+        label(canvas, 96, 304, "ALWAYS START IT AGAIN FROM HERE.", 2, dim);
+
+        static const char *const choices[remove_choices] = {
+            "REMOVE IT. KEEP MY SETTINGS",
+            "REMOVE IT AND MY SETTINGS TOO",
+            "CANCEL",
+        };
+        unsigned at = 420;
+        for (int i = 0; i < remove_choices; i++) {
+            bool on = i == remove_choice;
+            if (on) {
+                canvas.rectangle(96, at - 14, 1200, 68, panel);
+                canvas.rectangle(96, at - 14, 8, 68,
+                                 i == 2 ? accent : bad);
+            }
+            label(canvas, 136, at, choices[i], 3,
+                  on ? (i == 2 ? ink : bad) : dim);
+            at += 88;
+        }
+        label(canvas, 96, 760, "YOUR SETTINGS ARE THE TUNING AND THE", 2, dim);
+        label(canvas, 96, 798, "PER GAME PROFILES YOU HAVE SAVED.", 2, dim);
+        label(canvas, 96, 980, "CROSS: CHOOSE    CIRCLE: BACK", 2, dim);
+        return;
+    }
+
     label(canvas, 96, 72, "GYROAIM", 7, ink);
     label(canvas, 96, 150, "CONTROL PANEL", 2, dim);
 
@@ -502,14 +619,21 @@ void draw(Canvas &canvas) noexcept
         "STOP THE SERVICE",
         "START WITH THE CONSOLE",
         "SETTINGS ON YOUR PHONE",
+        "REMOVE THE SERVICE FROM THIS CONSOLE",
     };
 
-    unsigned row = 496;
+    unsigned row = 470;
     for (int i = 0; i < menu_items; i++) {
         bool on = i == selected;
+        bool destructive = i == menu_items - 1;
+
+        /* The last one is set apart: it undoes everything the others do. */
+        if (destructive)
+            row += 34;
+
         if (on) {
             canvas.rectangle(96, row - 14, 1728, 68, panel);
-            canvas.rectangle(96, row - 14, 8, 68, accent);
+            canvas.rectangle(96, row - 14, 8, 68, destructive ? bad : accent);
         }
         char text[96];
         if (i == 2)
@@ -517,7 +641,8 @@ void draw(Canvas &canvas) noexcept
                           auto_on ? "ON" : "OFF");
         else
             std::snprintf(text, sizeof(text), "%s", names[i]);
-        label(canvas, 136, row, text, 3, on ? ink : dim);
+        label(canvas, 136, row, text, 3,
+              on ? (destructive ? bad : ink) : dim);
         row += 88;
     }
 

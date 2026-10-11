@@ -17,6 +17,7 @@ typedef struct {
     int         save_as_title;  /* portal asked to keep these per game */
     int         reload_request; /* portal asked to reread the file */
     int         quit_request;   /* portal asked the service to stop */
+    int         uninstall;      /* 1 keep settings, 2 take those too */
     int         kstuff;         /* can the transform be installed at all */
     char        path[GA_PATH_MAX];   /* where settings are being kept */
 

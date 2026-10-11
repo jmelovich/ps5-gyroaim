@@ -362,9 +362,18 @@ int main(void)
         /* Settings changed in the portal: fold them in and remember them. */
         pthread_mutex_lock(&web.lock);
         if (web.quit_request) {
+            int uninstall = web.uninstall;
             web.quit_request = 0;
+            web.uninstall = 0;
             pthread_mutex_unlock(&web.lock);
-            ga_log("the portal asked the service to stop");
+            if (uninstall) {
+                int gone = ga_uninstall(uninstall == 2);
+                ga_log("the portal asked the service to uninstall itself; "
+                       "%d file(s) removed, settings %s", gone,
+                       uninstall == 2 ? "removed too" : "kept");
+            } else {
+                ga_log("the portal asked the service to stop");
+            }
             break;      /* the shutdown path below unhooks the game */
         }
         if (web.save_as_title && title[0]) {

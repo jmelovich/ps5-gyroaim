@@ -148,7 +148,7 @@ static void serve(int fd, ga_web_state_t *st)
 
     if (!strcmp(path, "/api/state") || !strcmp(path, "/api/set") ||
         !strcmp(path, "/api/save") || !strcmp(path, "/api/reload") ||
-        !strcmp(path, "/api/quit")) {
+        !strcmp(path, "/api/quit") || !strcmp(path, "/api/uninstall")) {
         char *body = malloc(RESP_MAX);
         if (!body) {
             reply(fd, 404, "text/plain", "", 0);
@@ -163,6 +163,13 @@ static void serve(int fd, ga_web_state_t *st)
             st->reload_request = 1;
         else if (!strcmp(path, "/api/quit"))
             st->quit_request = 1;
+        else if (!strcmp(path, "/api/uninstall")) {
+            /* Settings are kept unless asked for explicitly: someone who
+             * removes the service to reinstall it should not lose the tuning
+             * they spent an evening on. */
+            st->uninstall = (query && strstr(query, "settings=1")) ? 2 : 1;
+            st->quit_request = 1;
+        }
         int n = state_json(st, body, RESP_MAX);
         pthread_mutex_unlock(&st->lock);
         reply(fd, 200, "application/json", body, (size_t)(n > 0 ? n : 0));

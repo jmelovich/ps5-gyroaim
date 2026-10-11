@@ -221,3 +221,23 @@ with the gyro.
 Nothing on the console reads a title's stderr. The panel logs to the kernel
 log with `sceKernelDebugOutText`, which is the only way to see what a title is
 doing from another machine.
+
+## Uninstalling is split between the two pieces
+
+Each half does the part it is positioned for.
+
+The **panel** removes the copy under `/data/pldmgr/payloads/gyroaim` and its
+line in `autoload.txt`. Those are plain files, and the panel may be the only
+thing running.
+
+The **service** clears its own directory, because a title cannot read one:
+`opendir` is exported to a title and then refused, and the files there cannot
+be listed ahead of time anyway, since profiles are named after whichever games
+were played and the mapping notes after process ids. A payload runs outside the
+sandbox with the ordinary system libc, so it just works there.
+
+If the service is not running and settings are to go, the panel starts the
+bundled copy for the sole purpose of having it clear up and exit.
+
+Settings are kept unless asked for explicitly. Someone removing the service to
+reinstall it should not lose an evening of tuning.

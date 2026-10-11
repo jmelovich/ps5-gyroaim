@@ -90,6 +90,15 @@ int ga_config_set(ga_config_t *c, const char *key, const char *value);
 
 int ga_config_json(const ga_config_t *c, char *out, size_t n);
 
+/* Takes the service off the console: the copy pldmgr starts at boot, its line
+ * in pldmgr's list, and optionally everything under GA_DIR. The running
+ * process is not what this removes; the caller exits afterwards.
+ *
+ * Done here rather than in the control panel because this process runs
+ * outside the sandbox, where a directory can actually be read. Returns the
+ * number of files removed. */
+int ga_uninstall(int remove_settings);
+
 /* Looks at the stillness window the stub filled in and, if the pad really was
  * still, eases the resting offset toward what it measured. Returns 1 if the
  * bias changed. Always arranges for a fresh window. */

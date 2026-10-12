@@ -19,6 +19,13 @@ typedef struct {
 int ga_inject_install(const ga_target_t *target, const ga_slot_t *slots,
                       unsigned slot_count, ga_inject_t *out);
 
+/* Takes over an installation an earlier run left in the game, rather than
+ * installing a second one beside it. The layout version has to match ours,
+ * since everything past the magic word moves between builds.
+ * Returns 0 on success. */
+int ga_inject_adopt(const ga_target_t *target, const ga_orphan_t *orphan,
+                    ga_inject_t *out);
+
 /* Pushes the current settings and resets the staleness counter. Call it
  * regularly: if it stops, the stub stops modifying input. */
 int ga_inject_publish(const ga_inject_t *in, const ga_args_t *settings);

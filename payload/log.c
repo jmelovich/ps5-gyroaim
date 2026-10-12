@@ -75,7 +75,10 @@ void ga_log(const char *fmt, ...)
     while (bl && (body[bl - 1] == '\n' || body[bl - 1] == '\r'))
         body[--bl] = '\0';
 
-    snprintf(line, sizeof(line), "[GyroAim] %7.2f %s\n", uptime_s(), body);
+    /* The pid is in every line because two instances once wrote to this file
+     * at the same time and the result was unreadable. */
+    snprintf(line, sizeof(line), "[GyroAim:%d] %7.2f %s\n", (int)getpid(),
+             uptime_s(), body);
 
     pthread_mutex_lock(&g_lock);
     klog_puts(line);

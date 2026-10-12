@@ -166,6 +166,17 @@ _Static_assert(__builtin_offsetof(ga_rtld_dynsec_t, symtab) == 0x28, "");
 _Static_assert(__builtin_offsetof(ga_rtld_dynsec_t, plt_rela) == 0x48, "");
 
 int ga_hook_verbose = 0;
+volatile int ga_hook_cancel = 0;
+
+/* How much of a module is read at a time while looking for slots. */
+#define SCAN_CHUNK         0x4000
+
+/* How many unrecognised slot values may be followed while looking for a
+ * gateway left behind by an earlier run. */
+#define ORPHAN_TEST_CAP    256u
+
+static void note_orphan(pid_t pid, uint64_t value, ga_orphan_t *orphan,
+                        unsigned *tests);
 
 #define OBJ_LIST_SCAN_LO   0x300
 #define OBJ_LIST_SCAN_HI   0x600
@@ -283,18 +294,21 @@ static int object_is_games_own(const ga_rtld_object_t *o, const char *path)
     return strstr(path, "app0") != NULL || strstr(path, "shadowmnt") != NULL;
 }
 
-int ga_hook_find_slots(const ga_target_t *t, ga_slot_t *out, unsigned max)
+int ga_hook_find_slots(const ga_target_t *t, ga_slot_t *out, unsigned max,
+                       ga_orphan_t *orphan)
 {
     uint64_t head = 0;
-    unsigned found = 0, objects = 0, relas = 0;
+    unsigned found = 0, objects = 0, relas = 0, tests = 0;
 
     if (!t || !out || !max)
         return -1;
+    if (orphan)
+        memset(orphan, 0, sizeof(*orphan));
     if (find_object_list(t, &head) != 0)
         return -1;
 
     uint64_t at = head;
-    while (at && objects < OBJ_LIST_MAX && found < max) {
+    while (at && objects < OBJ_LIST_MAX && found < max && !ga_hook_cancel) {
         ga_rtld_object_t o;
         char path[192];
 
@@ -340,7 +354,8 @@ int ga_hook_find_slots(const ga_target_t *t, ga_slot_t *out, unsigned max)
                (unsigned long long)count, path[0] ? path : "<the executable>",
                (unsigned long long)o.mapbase);
 
-        for (uint64_t i = 0; i < count && found < max; i++) {
+        for (uint64_t i = 0; i < count && found < max && !ga_hook_cancel;
+             i++) {
             Elf64_Rela rela;
             uint64_t value = 0;
 
@@ -356,9 +371,11 @@ int ga_hook_find_slots(const ga_target_t *t, ga_slot_t *out, unsigned max)
             if (kernel_proc_copyout(t->pid, slot, &value, sizeof(value)) != 0)
                 continue;
 
+            int matched = 0;
             for (int k = 0; k < GA_FN_COUNT; k++) {
                 if (!t->fn[k] || value != (uint64_t)t->fn[k])
                     continue;
+                matched = 1;
                 int prot = kernel_get_vmem_protection(t->pid, slot,
                                                       sizeof(uint64_t));
                 out[found].slot = slot;
@@ -371,6 +388,8 @@ int ga_hook_find_slots(const ga_target_t *t, ga_slot_t *out, unsigned max)
                 found++;
                 break;
             }
+            if (!matched)
+                note_orphan(t->pid, value, orphan, &tests);
         }
     }
 
@@ -420,25 +439,91 @@ void ga_hook_verify_reads(const ga_target_t *t, const intptr_t *addrs,
     }
 }
 
+/* ---- an installation left behind -------------------------------------- *
+ *
+ * Our gateways have a fixed shape, 16 bytes of
+ *
+ *     48 8d 1x dd dd dd dd      lea rdx or rcx, [rip + disp]
+ *     e9 rr rr rr rr            jmp stub
+ *
+ * so a slot value that is not a known export can be tested for it, and the
+ * displacement leads straight to the shared page. The magic word there is what
+ * confirms the find; checking only the magic and the version keeps this
+ * working against a page written by a different build, whose fields may have
+ * moved.
+ */
+static int gateway_args(pid_t pid, intptr_t value, intptr_t *out_args,
+                        uint32_t *out_version)
+{
+    uint8_t code[16];
+    int32_t disp;
+    uint32_t header[2];
+
+    if (kernel_proc_copyout(pid, value, code, sizeof(code)) != 0)
+        return 0;
+    if (code[0] != 0x48 || code[1] != 0x8d || code[7] != 0xe9)
+        return 0;
+    if (code[2] != 0x15 && code[2] != 0x0d)      /* rdx or rcx */
+        return 0;
+
+    memcpy(&disp, code + 3, sizeof(disp));
+    intptr_t args = value + 7 + disp;
+
+    if (kernel_proc_copyout(pid, args, header, sizeof(header)) != 0)
+        return 0;
+    if (header[0] != GA_MAGIC)
+        return 0;
+
+    *out_args = args;
+    *out_version = header[1];
+    return 1;
+}
+
+/* Tests one slot value for being a gateway we left behind, with a cap so a
+ * pointer-dense module cannot turn this into a sweep. */
+static void note_orphan(pid_t pid, uint64_t value, ga_orphan_t *orphan,
+                        unsigned *tests)
+{
+    intptr_t args = 0;
+    uint32_t version = 0;
+
+    if (!orphan || orphan->args || *tests >= ORPHAN_TEST_CAP)
+        return;
+    if (!value || value >= (uint64_t)INTPTR_MAX)
+        return;
+
+    (*tests)++;
+    if (!gateway_args(pid, (intptr_t)value, &args, &version))
+        return;
+
+    orphan->args = args;
+    orphan->gateway = (intptr_t)value;
+    orphan->version = version;
+    orphan->slots = 1;
+    ga_log("orphan: a slot still points at a gateway from an earlier run; "
+           "shared page 0x%lx, layout version %u", (long)args, version);
+}
+
 /* ---- finding slots by value ------------------------------------------- */
 
-#define SCAN_CHUNK 0x4000
-
-int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max)
+int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max,
+                       ga_orphan_t *orphan)
 {
     uint64_t head = 0;
-    unsigned found = 0, objects = 0, scanned = 0;
+    unsigned found = 0, objects = 0, scanned = 0, tests = 0;
     uint8_t *chunk;
 
     if (!t || !out || !max)
         return -1;
+    if (orphan)
+        memset(orphan, 0, sizeof(*orphan));
     if (find_object_list(t, &head) != 0)
         return -1;
     if (!(chunk = malloc(SCAN_CHUNK)))
         return -1;
 
     uint64_t at = head;
-    while (at && objects < OBJ_LIST_MAX && found < max) {
+    while (at && objects < OBJ_LIST_MAX && found < max && !ga_hook_cancel) {
         ga_rtld_object_t o;
         char path[192];
 
@@ -453,13 +538,22 @@ int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max)
         if (!object_is_games_own(&o, path))
             continue;
 
+        if (o.mapsize > GA_SCAN_MAX_BYTES) {
+            ga_log("scan: skipping %s, 0x%llx bytes is too large to sweep; "
+                   "its relocation table is the way in",
+                   path[0] ? path : "<the executable>",
+                   (unsigned long long)o.mapsize);
+            continue;
+        }
+
         scanned++;
         ga_log("scan: %s, 0x%llx bytes at 0x%llx",
                path[0] ? path : "<the executable>",
                (unsigned long long)o.mapsize,
                (unsigned long long)o.mapbase);
 
-        for (uint64_t off = 0; off < o.mapsize && found < max;
+        for (uint64_t off = 0; off < o.mapsize && found < max &&
+                               !ga_hook_cancel;
              off += SCAN_CHUNK) {
             size_t len = SCAN_CHUNK;
             if (off + len > o.mapsize)
@@ -483,6 +577,17 @@ int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max)
                 memcpy(&value, chunk + i, sizeof(value));
                 if (!value)
                     continue;
+
+                /* Values inside the module being read are its own data, never
+                 * a gateway, which lives in a mapping we made. */
+                if (value < o.mapbase || value >= o.mapbase + o.mapsize) {
+                    int known = 0;
+                    for (int k = 0; k < GA_FN_COUNT; k++)
+                        if (t->fn[k] && value == (uint64_t)t->fn[k])
+                            known = 1;
+                    if (!known)
+                        note_orphan(t->pid, value, orphan, &tests);
+                }
 
                 for (int k = 0; k < GA_FN_COUNT; k++) {
                     if (!t->fn[k] || value != (uint64_t)t->fn[k])
@@ -529,15 +634,17 @@ int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max)
 
 #else
 
-int ga_hook_find_slots(const ga_target_t *t, ga_slot_t *out, unsigned max)
+int ga_hook_find_slots(const ga_target_t *t, ga_slot_t *out, unsigned max,
+                       ga_orphan_t *orphan)
 {
-    (void)t; (void)out; (void)max;
+    (void)t; (void)out; (void)max; (void)orphan;
     return -1;
 }
 
-int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max)
+int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max,
+                       ga_orphan_t *orphan)
 {
-    (void)t; (void)out; (void)max;
+    (void)t; (void)out; (void)max; (void)orphan;
     return -1;
 }
 

@@ -245,6 +245,26 @@ int ga_inject_install(const ga_target_t *t, const ga_slot_t *slots,
         }
     }
 
+    /* Which kinds we have a stub for. Checked before anything is mapped: an
+     * earlier version mapped memory in the game, wrote the code, and only
+     * then discovered it could serve none of the slots, so every retry
+     * churned the game's address space for nothing. */
+    int served[GA_FN_COUNT];
+    memset(served, 0, sizeof(served));
+    for (unsigned i = 0; i < N_STUBS; i++)
+        served[k_stubs[i].kind] = 1;
+
+    unsigned usable = 0;
+    for (unsigned i = 0; i < slot_count; i++)
+        if (slots[i].kind >= 0 && slots[i].kind < GA_FN_COUNT &&
+            served[slots[i].kind] && t->fn[slots[i].kind] > 0)
+            usable++;
+    if (!usable) {
+        ga_log("inject: none of the %u slot(s) found is one we can serve",
+               slot_count);
+        return -1;
+    }
+
     size_t stub_len = end - begin;
     size_t gw_off = ALIGN_UP(stub_len, 16u);
     size_t code_len = ALIGN_UP(gw_off + N_STUBS * GATEWAY_SIZE, TARGET_PAGE);
@@ -328,13 +348,6 @@ int ga_inject_install(const ga_target_t *t, const ga_slot_t *slots,
     }
     a->hook_count = n;
 
-    if (!n) {
-        ga_log("inject: none of the %u slots found is one we can serve",
-               slot_count);
-        free(a);
-        goto fail_unmap;
-    }
-
     if (write_game(t->pid, out->args, a, sizeof(*a)) != 0) {
         ga_log("inject: writing the shared page failed");
         free(a);
@@ -391,6 +404,76 @@ fail_unmap:
         ga_kstuff_munmap(t->pid, map, code_len + args_len);
     memset(out, 0, sizeof(*out));
     return -1;
+}
+
+int ga_inject_adopt(const ga_target_t *t, const ga_orphan_t *orphan,
+                    ga_inject_t *out)
+{
+#ifndef __PROSPERO__
+    (void)t; (void)orphan; (void)out;
+    return -1;
+#else
+    ga_args_t *a;
+
+    if (!t || !orphan || !out || !orphan->args)
+        return -1;
+
+    if (orphan->version != GA_LAYOUT_VERSION) {
+        ga_log("orphan: its layout is version %u and ours is %u, so its "
+               "fields cannot be trusted; this game needs restarting to "
+               "clear it", orphan->version, GA_LAYOUT_VERSION);
+        return -1;
+    }
+
+    if (!(a = calloc(1, sizeof(*a))))
+        return -1;
+
+    if (kernel_proc_copyout(t->pid, orphan->args, a, sizeof(*a)) != 0 ||
+        a->magic != GA_MAGIC || a->version != GA_LAYOUT_VERSION) {
+        ga_log("orphan: its shared page could not be read back");
+        free(a);
+        return -1;
+    }
+    if (!a->hook_count || a->hook_count > GA_MAX_SLOTS) {
+        ga_log("orphan: it claims %u hooked slot(s), which cannot be right",
+               a->hook_count);
+        free(a);
+        return -1;
+    }
+
+    /* Every slot it claims must still point into it, or something else has
+     * been at the game since and guessing would be worse than starting over. */
+    unsigned confirmed = 0;
+    for (unsigned i = 0; i < a->hook_count; i++) {
+        uint64_t value = 0;
+        if (kernel_proc_copyout(t->pid, (intptr_t)a->hook_slot[i], &value,
+                                sizeof(value)) != 0)
+            continue;
+        if (value != a->hook_orig[i])
+            confirmed++;        /* still redirected somewhere, i.e. at us */
+    }
+    if (!confirmed) {
+        ga_log("orphan: none of its slots is still redirected");
+        free(a);
+        return -1;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->pid = t->pid;
+    out->args = orphan->args;
+    out->hooked = confirmed;
+    out->installed = 1;
+    /* The code stays where it is; nothing here unmaps it, and the restore
+     * table needed to undo the hooks is on the page itself. */
+    out->code = 0;
+    out->code_len = 0;
+
+    ga_log("orphan: taken over, %u of %u slot(s) still redirected; the "
+           "transform is live again without touching the game", confirmed,
+           a->hook_count);
+    free(a);
+    return 0;
+#endif
 }
 
 int ga_inject_publish(const ga_inject_t *in, const ga_args_t *s)

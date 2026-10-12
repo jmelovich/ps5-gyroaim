@@ -41,6 +41,9 @@ static volatile sig_atomic_t g_quit;
 static void on_signal(int sig)
 {
     g_quit = sig;
+    /* A scan in progress must give up, or a shutdown waits minutes for it and
+     * a replacement instance gives up and leaves two of us running. */
+    ga_hook_cancel = 1;
 }
 
 static void install_signal_handlers(void)
@@ -99,7 +102,29 @@ static int bind_portal(void)
     return fd;
 }
 
-static pid_t read_pidfile(void)
+static pid_t read_pidfile_value(void);
+
+/* The pidfile is the authority on which instance is in charge.
+ *
+ * The listening socket alone turned out not to be enough. Two instances were
+ * found running at once: an old one still hooked into a game and publishing to
+ * it, and a new one holding the portal and unable to recognise the slot the
+ * old one owned. Aiming worked, from the old one, while the portal reported
+ * that it could not attach. However that came about, an instance that has been
+ * superseded has no business still driving a game, so each one checks that the
+ * pidfile still names it and stands down if it does not. */
+static int superseded(void)
+{
+    pid_t owner = read_pidfile_value();
+
+    if (owner <= 0 || owner == getpid())
+        return 0;
+    /* Someone else's pid is in the file. If they are alive, they are in
+     * charge; if not, the file is stale and ours to reclaim. */
+    return ga_proc_alive(owner);
+}
+
+static pid_t read_pidfile_value(void)
 {
     FILE *f = fopen(PIDFILE, "r");
     long v = 0;
@@ -110,6 +135,24 @@ static pid_t read_pidfile(void)
         v = 0;
     fclose(f);
     return v > 0 ? (pid_t)v : -1;
+}
+
+static pid_t read_pidfile(void)
+{
+    return read_pidfile_value();
+}
+
+/* Only remove the pidfile if it still names us.
+ *
+ * It did not check, and that broke the lock: an older instance, asked to
+ * leave, deleted the file a newer one had already written, after which no
+ * instance could tell who was in charge. A later start then found the port
+ * held and the file empty, refused to run, and left the stuck instance in
+ * place. */
+static void clear_pidfile(void)
+{
+    if (read_pidfile_value() == getpid())
+        unlink(PIDFILE);
 }
 
 static void write_pidfile(void)
@@ -238,34 +281,47 @@ static void report(const ga_args_t *t)
            t->cal_count, t->cal_was_active ? " (aiming, not usable)" : "");
 }
 
-static int attach(pid_t game, const char *title, ga_inject_t *inj)
+/* One attempt at hooking a game.
+ *
+ * Returns 0 once installed, 1 while the game is not ready yet, and -1 when an
+ * install was tried and failed. "Not ready" is the normal case for the first
+ * second or two of a launch: the pad library is loaded a moment after the
+ * process appears, and its import slots are not bound until something calls
+ * through them. A game can also reach that point much later than it starts,
+ * which is why this is retried rather than attempted once.
+ *
+ * `deep` allows the value scan, which reads a module end to end. That is the
+ * only way to find slots in a module built without a PLT, but on a large
+ * retail executable it is expensive, so the caller only asks for it
+ * occasionally.
+ */
+static int attach_once(pid_t game, const char *title, int deep,
+                       ga_inject_t *inj)
 {
     ga_target_t target;
     ga_slot_t slots[GA_MAX_SLOTS];
     int n;
 
-    for (int tries = 0; tries < 60 && !g_quit; tries++) {
-        if (ga_hook_inspect(game, &target) == 0)
-            break;
-        if (tries == 59) {
-            ga_log("%s: libScePad never appeared", title);
-            return -1;
-        }
-        usleep(250000);
-    }
-    if (g_quit)
-        return -1;
+    if (ga_hook_inspect(game, &target) != 0)
+        return 1;               /* no pad library yet */
 
-    n = ga_hook_find_slots(&target, slots, GA_MAX_SLOTS);
-    if (n <= 0) {
-        ga_log("%s: no slots in the relocation table; scanning by value",
-               title);
-        n = ga_hook_scan_slots(&target, slots, GA_MAX_SLOTS);
-    }
-    if (n <= 0) {
-        ga_log("%s: found no pad import slots; leaving it alone", title);
-        return -1;
-    }
+    /* An earlier run may already be wired into this game: killed or displaced
+     * before it could restore the slots, it leaves them pointing at gateways
+     * rather than Sony's exports. The finders below notice that in passing.
+     * Taking such an installation over costs nothing and touches none of the
+     * game's memory; without it, this game could never be attached to again,
+     * while its stub carried on running with nobody feeding it. */
+    ga_orphan_t orphan;
+
+    n = ga_hook_find_slots(&target, slots, GA_MAX_SLOTS, &orphan);
+    if (n <= 0 && !orphan.args && deep)
+        n = ga_hook_scan_slots(&target, slots, GA_MAX_SLOTS, &orphan);
+
+    if (orphan.args)
+        return ga_inject_adopt(&target, &orphan, inj) == 0 ? 0 : -1;
+
+    if (n <= 0)
+        return 1;               /* imports not bound yet, or none to find */
 
     if (ga_inject_install(&target, slots, (unsigned)n, inj) != 0) {
         ga_log("%s: install failed; the game is untouched", title);
@@ -303,6 +359,10 @@ int main(void)
     ga_web_state_t web;
     int attached = 0;
     int64_t next_report = 0;
+    int64_t next_attach = 0;
+    int64_t game_since = 0;
+    int64_t next_deep = 0;
+    int attach_state = 0;       /* last reported, so it is logged once */
     int64_t ms = 0;
 
     memset(&inj, 0, sizeof(inj));
@@ -358,6 +418,13 @@ int main(void)
     while (!g_quit) {
         pid_t found[4];
         unsigned n = ga_proc_find(GAME_PROC, found, 4);
+
+        /* Another instance has taken over: unhook and go, rather than two of
+         * us driving the same game. */
+        if (superseded()) {
+            ga_log("another instance owns %s now; standing down", PIDFILE);
+            break;
+        }
 
         /* Settings changed in the portal: fold them in and remember them. */
         pthread_mutex_lock(&web.lock);
@@ -432,18 +499,11 @@ int main(void)
             pthread_mutex_unlock(&web.lock);
 
             publish_status(&web, 0, title, "attaching", NULL, 0);
-            attached = attach(game, title, &inj) == 0;
-            if (attached) {
-                ga_inject_publish(&inj, &settings);
-                if (GA_SELFTEST)
-                    selftest(&inj, &settings, &web.cfg);
-                ga_log("%s: transform live", title);
-                publish_status(&web, 1, title, "transform live", NULL, 0);
-                next_report = 0;
-            } else {
-                publish_status(&web, 0, title,
-                               "could not attach to this game", NULL, 0);
-            }
+            attached = 0;
+            attach_state = 0;
+            game_since = ms;
+            next_attach = ms;
+            next_deep = ms;
         } else if (n == 0 && game != -1) {
             ga_log("game stopped: %s, pid %d", title, (int)game);
             /* The process is gone; there is nothing left to restore, and the
@@ -455,6 +515,44 @@ int main(void)
             title[0] = '\0';
             publish_status(&web, 0, "", "waiting for a game to start",
                            NULL, 0);
+        }
+
+        /* Keep trying while a game is running and the transform is not in.
+         * A game can load its pad library, and bind the imports that reach
+         * it, well after the process appears. */
+        if (!attached && game != -1 && ms >= next_attach) {
+            int deep = ms >= next_deep;
+            int rc = attach_once(game, title, deep, &inj);
+
+            if (deep)
+                next_deep = ms + 15000;
+
+            if (rc == 0) {
+                attached = 1;
+                ga_inject_publish(&inj, &settings);
+                if (GA_SELFTEST)
+                    selftest(&inj, &settings, &web.cfg);
+                ga_log("%s: transform live%s", title,
+                       ms - game_since > 2000 ? " (it took a moment)" : "");
+                publish_status(&web, 1, title, "transform live", NULL, 0);
+                next_report = 0;
+            } else {
+                /* Often for the first second or two of a launch, so the retry
+                 * is quick at first and then eases off rather than reading a
+                 * large executable over and over. */
+                next_attach = ms + (ms - game_since < 60000 ? 1000 : 15000);
+
+                if (rc != attach_state) {
+                    attach_state = rc;
+                    if (rc == 1)
+                        ga_log("%s: waiting for the game to load its "
+                               "controller code", title);
+                }
+                publish_status(&web, 0, title,
+                               rc == 1 ? "waiting for the game to be ready"
+                                       : "could not attach to this game",
+                               NULL, 0);
+            }
         }
 
         if (attached) {
@@ -500,7 +598,7 @@ int main(void)
     if (attached && ga_proc_alive(inj.pid))
         ga_inject_remove(&inj);
     close(portal);
-    unlink(PIDFILE);
+    clear_pidfile();
     ga_log_close();
     return 0;
 }

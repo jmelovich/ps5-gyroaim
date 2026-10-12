@@ -41,9 +41,6 @@ enum {
     GA_SPACE_PLAYER,      /* yaw from the component around gravity */
 };
 
-#define GA_MAGIC          0x4f524947u   /* "GYRO" */
-#define GA_LAYOUT_VERSION 4u
-
 /* Reads without a settings refresh before the stub stops touching the data.
  * If the service dies the game goes back to normal input rather than freezing
  * mid-turn. */

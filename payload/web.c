@@ -23,6 +23,19 @@
 #define REQ_MAX  2048
 #define RESP_MAX 12288
 
+/* How long one client may take over its own connection, and how many may be
+ * in flight at once.
+ *
+ * Both exist because of a bug worth remembering: the portal served one
+ * connection at a time with a blocking read and no timeout, so a client that
+ * connected and sent nothing stopped the portal dead. Browsers do that
+ * routinely with speculative connections, and a phone that sleeps mid-request
+ * leaves one half open. Aiming carried on, because that runs from the service
+ * loop, so the page looked like it had lost the service while the gyro still
+ * worked. */
+#define CLIENT_TIMEOUT_S 3
+#define MAX_CLIENTS      6
+
 static void send_all(int fd, const char *p, size_t n)
 {
     while (n) {
@@ -112,7 +125,9 @@ static void serve(int fd, ga_web_state_t *st)
     char req[REQ_MAX];
     size_t got = 0;
 
-    /* Headers only; nothing here reads a body. */
+    /* Headers only; nothing here reads a body. The socket carries a receive
+     * timeout, so a client that stops mid-request ends here rather than
+     * holding the connection. */
     while (got < sizeof(req) - 1) {
         ssize_t r = recv(fd, req + got, sizeof(req) - 1 - got, 0);
         if (r <= 0)
@@ -180,16 +195,70 @@ static void serve(int fd, ga_web_state_t *st)
     reply(fd, 404, "text/plain", "not found", 9);
 }
 
+/* One connection, on its own thread, so a slow client delays only itself. */
+typedef struct {
+    int             fd;
+    ga_web_state_t *state;
+} client_t;
+
+static volatile int g_clients;
+
+static void *client_thread(void *arg)
+{
+    client_t *client = arg;
+
+    serve(client->fd, client->state);
+    close(client->fd);
+    __atomic_sub_fetch(&g_clients, 1, __ATOMIC_RELAXED);
+    free(client);
+    return NULL;
+}
+
 static void *web_thread(void *arg)
 {
     ga_web_state_t *st = arg;
 
     for (;;) {
         int fd = accept(st->listen_fd, NULL, NULL);
-        if (fd < 0)
+
+        if (fd < 0) {
+            /* Do not spin if the listening socket is unhappy. */
+            usleep(20000);
             continue;
-        serve(fd, st);
-        close(fd);
+        }
+
+        /* Bounded before anything is read, so even a client that is refused
+         * below cannot hold the socket open indefinitely. */
+        struct timeval tv;
+        tv.tv_sec = CLIENT_TIMEOUT_S;
+        tv.tv_usec = 0;
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+        if (__atomic_load_n(&g_clients, __ATOMIC_RELAXED) >= MAX_CLIENTS) {
+            /* Busy. Closing is kinder than queueing behind a stall. */
+            close(fd);
+            continue;
+        }
+
+        client_t *client = malloc(sizeof(*client));
+        if (!client) {
+            close(fd);
+            continue;
+        }
+        client->fd = fd;
+        client->state = st;
+
+        __atomic_add_fetch(&g_clients, 1, __ATOMIC_RELAXED);
+
+        pthread_t thread;
+        if (pthread_create(&thread, NULL, client_thread, client) != 0) {
+            __atomic_sub_fetch(&g_clients, 1, __ATOMIC_RELAXED);
+            close(fd);
+            free(client);
+            continue;
+        }
+        pthread_detach(thread);
     }
     return NULL;
 }

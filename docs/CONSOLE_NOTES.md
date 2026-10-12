@@ -257,3 +257,45 @@ the data exists at full rate.
 
 `pad.h` keeps the sample layout and its static assertions, which are the
 authoritative record of the offsets and fail the build if anyone disturbs them.
+
+## Only one service may run at a time, and it matters more than it looks
+
+The SDK's kernel read and write primitives are not safe to use concurrently.
+PuckbridgePS5 serialises them with a lock for that reason. Two *processes*
+cannot share a lock, so two copies of the service both walking a game's memory
+can corrupt the primitive between them.
+
+That is not theoretical. Two instances were once running at once, and one of
+them ended up spinning in state RUN, ignoring both SIGTERM and SIGKILL, still
+answering on its port. An unkillable process holding the lock port is as bad as
+it sounds: nothing can replace it until the console is restarted.
+
+Four things let that happen, all now fixed:
+
+- The portal served one connection at a time with a blocking read and no
+  timeout, so a client that connected and sent nothing stopped it dead.
+- The value sweep ran unbounded over a module. On a multi-gigabyte game it
+  takes minutes, during which the service checks no signal and cannot be
+  replaced, and a replacement gives up and leaves two running.
+- A departing instance removed the pidfile even when a newer instance owned
+  it, after which nothing could tell who was in charge.
+- Nothing checked whether this instance was still the one in charge.
+
+The rules that follow: the sweep is capped by module size and gives up when
+asked, the pidfile is only removed by its owner, and every instance checks each
+tick that the pidfile still names it and stands down if not.
+
+## An orphaned gateway makes a game unattachable
+
+If the service does not get to restore the slots, the game keeps pointing at
+gateways with nobody feeding them. A slot then holds our gateway rather than
+Sony's export, so the scan no longer recognises it as a pad slot and that game
+can never be attached to again, while the stub carries on running. Aiming can
+keep working while the service reports that it failed, which is exactly how
+this was first noticed.
+
+The finders now test an unrecognised slot value for the gateway shape,
+`48 8d 1x <disp32> e9 <rel32>`, and follow the displacement to look for the
+magic word. Finding one means an installation is already there and can be
+taken over rather than fought. The test is capped so a pointer-dense module
+cannot turn it into a sweep of its own.

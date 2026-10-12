@@ -22,10 +22,27 @@
 #define GA_OFF_TIMESTAMP  0x50
 #define GA_PAD_SIZE       120
 
+/* What the gyro can drive. Two sticks, two axes each, addressed as a flat
+ * list so the routing table below is a plain matrix. */
 enum {
-    GA_TARGET_RIGHT_STICK = 0,
-    GA_TARGET_LEFT_STICK,
-    GA_TARGET_TOUCHPAD,
+    GA_OUT_RIGHT_X = 0,
+    GA_OUT_RIGHT_Y,
+    GA_OUT_LEFT_X,
+    GA_OUT_LEFT_Y,
+    GA_OUT_COUNT
+};
+
+#define GA_STICK_COUNT 2
+#define GA_OUT_OF(stick, axis) ((stick) * 2 + (axis))
+
+/* What the gyro offers. Rotations rather than raw sensor axes, because a
+ * person thinks in turning, tilting and leaning, and because the gravity-
+ * referenced spaces are defined in those terms. */
+enum {
+    GA_SRC_YAW = 0,     /* turning left and right */
+    GA_SRC_PITCH,       /* tilting up and down */
+    GA_SRC_ROLL,        /* leaning side to side */
+    GA_SRC_COUNT
 };
 
 enum {
@@ -84,7 +101,6 @@ typedef struct {
 
     /* ---- settings: service writes, stub reads ---- */
     volatile uint32_t enabled;
-    volatile uint32_t target;            /* GA_TARGET_* */
     volatile uint32_t activation;        /* GA_ACT_* */
     volatile uint32_t activation_mask;
     volatile uint32_t trigger_right;
@@ -94,18 +110,24 @@ typedef struct {
     volatile uint32_t axis_pitch;
     volatile uint32_t axis_roll;
 
-    /* Sensitivity, in camera degrees per degree of hand movement. Two values
-     * with a speed band between them give the usual acceleration: slow
-     * movement gets min_sens for fine aim, fast movement gets max_sens.
-     * Equal values mean no acceleration. The sign carries axis inversion,
-     * because the stub must not negate a float. */
-    volatile float sens_min;
-    volatile float sens_max;
-    volatile float sens_lo_rate;         /* deg/s where min applies */
-    volatile float sens_hi_rate;         /* deg/s where max applies */
-    volatile float vert_scale;           /* pitch relative to yaw */
-    volatile float invert_yaw;           /* +1 or -1 */
-    volatile float invert_pitch;
+    /* Where each rotation goes, and how hard.
+     *
+     * route[source][destination] is +1, -1 or 0: which control a rotation
+     * drives and which way round. A row may feed several destinations, so one
+     * rotation can move both sticks, and a column may be fed by several
+     * sources. Held as floats because the stub multiplies by them, and it
+     * cannot negate a float itself.
+     *
+     * strength is per rotation, in camera degrees per degree of hand
+     * movement, so 1.0 turns the view as far as the hands move. */
+    volatile float route[GA_SRC_COUNT][GA_OUT_COUNT];
+    volatile float strength[GA_SRC_COUNT];
+
+    /* Acceleration: everything is multiplied by 1 below lo_rate, rising to
+     * accel_mul at hi_rate. A multiplier of 1 means none. */
+    volatile float accel_mul;
+    volatile float sens_lo_rate;         /* deg/s where the ramp starts */
+    volatile float sens_hi_rate;         /* deg/s where it is fully applied */
 
     /* The game's own camera. max_turn is how fast it spins at full stick, in
      * degrees a second; it is what makes sensitivity mean anything. */
@@ -157,9 +179,9 @@ typedef struct {
     volatile float    cal_amax[3];
 
     /* ---- per-pad running state, owned by the stub ---- */
-    volatile float    ring[GA_RING_N][2];
+    volatile float    ring[GA_RING_N][GA_SRC_COUNT];
     volatile uint32_t ring_i;
-    volatile float    carry[2];
+    volatile float    carry[GA_STICK_COUNT][2];
     volatile uint64_t last_ts;
     volatile uint32_t rumble_last_level;
     volatile uint64_t rumble_last_ts;
@@ -174,12 +196,11 @@ typedef struct {
     volatile uint32_t last_buttons;
     volatile float    last_angvel[3];
     volatile float    last_accel[3];
-    volatile float    rate_yaw;          /* deg/s, after bias and space */
-    volatile float    rate_pitch;
-    volatile float    cam_yaw;           /* deg/s asked of the camera */
-    volatile float    cam_pitch;
-    volatile float    out_frac;          /* final deflection, 0..1 */
-    volatile uint8_t  in_rx, in_ry, out_rx, out_ry;
+    volatile float    rate[GA_SRC_COUNT];   /* deg/s, after bias and space */
+    volatile float    want[GA_STICK_COUNT][2];  /* deg/s asked of each stick */
+    volatile float    out_frac;              /* the busier stick, 0..1 */
+    volatile uint8_t  in_rx, in_ry, out_rx, out_ry;    /* right stick */
+    volatile uint8_t  in_lx, in_ly, out_lx, out_ly;    /* left stick */
     volatile uint8_t  last_l2, last_r2;
     volatile uint8_t  active;
     volatile uint8_t  connected;

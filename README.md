@@ -20,12 +20,16 @@ ShadowMount+ 1.7beta4.
   homebrew one are confirmed.
 - Reads the real gyro and writes the stick, with a self test that proves the
   arithmetic without anyone holding the controller.
-- Gyro to right or left stick, gated on a trigger, a button, or always.
+- **Any rotation to any control.** Turning, tilting and leaning each route to
+  the right stick's two axes, the left stick's two axes, or several at once,
+  in either direction. So the view can be on one stick and movement on the
+  other, or one rotation can drive both. Gated on a trigger, a button, or
+  always.
 - **Works in camera-velocity space**, so the game's own deadzone and response
   curve are inverted rather than fought. This is the part that makes aiming
   feel proportional instead of mushy near the centre and twitchy further out.
-- Sensitivity in camera degrees per degree of hand movement, with optional
-  acceleration between a slow and a fast value.
+- Strength per rotation, in degrees of view per degree of hand movement, with
+  an acceleration multiplier that comes in over a speed band.
 - Drift calibration that learns the gyro's resting offset while the pad is
   still, and knows not to trust a window in which you were aiming.
 - Tiered smoothing and tightening, so fine aim is steady and flicks are not.
@@ -119,11 +123,16 @@ ShadowMount+ new enough to mount `/data` into a title, which the panel checks.
 
 Open `http://<console ip>:6080` from a phone or PC on the same network.
 
-Every number has both a slider and a box you can type into, sections collapse
-so the page is not a wall of controls, and two live graphs show what is
-happening: the game's stick curve with a dot tracing where you are on it, and
-hand speed against camera speed. Between them you can see the effect of a
-setting before you can feel it.
+Every number has both a slider and a box you can type into, and sections
+collapse so the page is not a wall of controls.
+
+Routing is a three by four grid: a row per rotation, a column per control.
+Tapping a square cycles it between blank, on, and inverted. That keeps the
+whole mapping visible at a glance and avoids a separate copy of every slider
+for every axis, which is what a direct approach would have cost.
+
+Two live graphs show what is happening: the game's stick curve with a dot
+tracing where you are on it, and hand speed against view speed.
 
 **There is no authentication.** Anyone on your network can open the portal and
 change the settings.

@@ -22,6 +22,10 @@ constexpr const char *autostart_elf =
     "/data/pldmgr/payloads/gyroaim/gyroaim.elf";
 constexpr const char *autostart_list = "/data/pldmgr/autoload.txt";
 
+/* The version this app carries inside itself, so it can tell whether the
+ * service on the console is the one it shipped with. */
+const char *bundled_version();
+
 struct Status {
     bool  reachable;        /* the service answered */
     bool  kstuff;           /* the transform can be installed at all */
@@ -47,6 +51,17 @@ bool stop_service();
 bool enable_autostart(char *why, std::size_t why_len);
 bool disable_autostart(char *why, std::size_t why_len);
 bool autostart_enabled();
+
+/* Makes the service on the console match the copy in this app.
+ *
+ * Updating the app would otherwise leave an older service running, and an
+ * older one set to start at boot, with nothing saying so. Called on launch:
+ * if the running service reports a different version it is replaced, and if
+ * the boot copy exists it is refreshed too.
+ *
+ * Returns 1 if anything was changed, 0 if everything already matched, and -1
+ * on failure. `what` describes the outcome. */
+int match_bundled_version(char *what, std::size_t what_len);
 
 /* Takes the service off the console.
  *

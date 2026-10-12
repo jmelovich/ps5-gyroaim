@@ -17,7 +17,6 @@ void ga_config_defaults(ga_config_t *c)
     memset(c, 0, sizeof(*c));
 
     c->enabled = 1;
-    c->target = GA_TARGET_RIGHT_STICK;
     c->space = GA_SPACE_PLAYER;
 
     c->activation = GA_ACT_TRIGGER;
@@ -25,23 +24,28 @@ void ga_config_defaults(ga_config_t *c)
     c->trigger_threshold = 64;
     c->activation_mask = GA_BTN_L2;
 
-    /* A touch over one-to-one is a good starting point for aiming: the camera
+    /* Turning drives the right stick sideways and tilting drives it
+     * vertically, which is ordinary gyro aiming. Positive yaw is turning
+     * left while aiming left is a smaller stick value, hence the sign. */
+    c->route[GA_SRC_YAW][GA_OUT_RIGHT_X] = -1;
+    c->route[GA_SRC_PITCH][GA_OUT_RIGHT_Y] = 1;
+
+    /* A touch over one-to-one is a good starting point for aiming: the view
      * turns slightly further than the hands do, which keeps wrist travel
      * reasonable without losing the sense of pointing. */
-    c->sens_min = 1.2f;
-    c->sens_max = 1.2f;              /* equal, so no acceleration by default */
+    c->strength[GA_SRC_YAW] = 1.2f;
+    c->strength[GA_SRC_PITCH] = 1.2f;
+    c->strength[GA_SRC_ROLL] = 1.0f;
+
+    c->accel_mul = 1.0f;             /* no acceleration by default */
     c->sens_lo_rate = 0.0f;
     c->sens_hi_rate = 75.0f;
-    c->vert_scale = 1.0f;
 
     /* PlayStation's frame is right-handed with Y up, so Y is yaw, X is pitch
-     * and Z is roll. Positive yaw is turning left while aiming left is a
-     * smaller stick value, hence the inversion on yaw alone. */
+     * and Z is roll. */
     c->axis_yaw = 1;
     c->axis_pitch = 0;
     c->axis_roll = 2;
-    c->invert_yaw = 1;
-    c->invert_pitch = 0;
 
     /* Guesses until measured per game. 300 deg/s is a typical full-stick turn
      * rate, and most games apply a mild curve with a small deadzone. */
@@ -77,7 +81,6 @@ static float clampf(float v, float lo, float hi)
 void ga_config_clamp(ga_config_t *c)
 {
     c->enabled = c->enabled ? 1 : 0;
-    c->target = clampi(c->target, 0, GA_TARGET_TOUCHPAD);
     c->space = clampi(c->space, 0, GA_SPACE_PLAYER);
 
     c->activation = clampi(c->activation, 0, GA_ACT_NEVER);
@@ -86,13 +89,14 @@ void ga_config_clamp(ga_config_t *c)
     if (!c->activation_mask)
         c->activation_mask = GA_BTN_L2;
 
-    c->sens_min = clampf(c->sens_min, 0.0f, 20.0f);
-    c->sens_max = clampf(c->sens_max, 0.0f, 20.0f);
+    for (int s = 0; s < GA_SRC_COUNT; s++) {
+        c->strength[s] = clampf(c->strength[s], 0.0f, 20.0f);
+        for (int d = 0; d < GA_OUT_COUNT; d++)
+            c->route[s][d] = clampi(c->route[s][d], -1, 1);
+    }
+    c->accel_mul = clampf(c->accel_mul, 0.1f, 8.0f);
     c->sens_lo_rate = clampf(c->sens_lo_rate, 0.0f, 500.0f);
     c->sens_hi_rate = clampf(c->sens_hi_rate, 0.0f, 1000.0f);
-    c->vert_scale = clampf(c->vert_scale, 0.1f, 3.0f);
-    c->invert_yaw = c->invert_yaw ? 1 : 0;
-    c->invert_pitch = c->invert_pitch ? 1 : 0;
     c->axis_yaw = clampi(c->axis_yaw, 0, 2);
     c->axis_pitch = clampi(c->axis_pitch, 0, 2);
     c->axis_roll = clampi(c->axis_roll, 0, 2);
@@ -180,7 +184,6 @@ void ga_config_to_args(const ga_config_t *c, ga_args_t *a)
     a->version = GA_LAYOUT_VERSION;
 
     a->enabled = (uint32_t)c->enabled;
-    a->target = (uint32_t)c->target;
     a->space = (uint32_t)c->space;
 
     a->activation = (uint32_t)c->activation;
@@ -192,15 +195,16 @@ void ga_config_to_args(const ga_config_t *c, ga_args_t *a)
     a->axis_pitch = (uint32_t)c->axis_pitch;
     a->axis_roll = (uint32_t)c->axis_roll;
 
-    a->sens_min = c->sens_min;
-    a->sens_max = c->sens_max;
+    /* The signs live here as numbers: the stub multiplies by them, since it
+     * cannot negate a float itself. */
+    for (int s = 0; s < GA_SRC_COUNT; s++) {
+        a->strength[s] = c->strength[s];
+        for (int d = 0; d < GA_OUT_COUNT; d++)
+            a->route[s][d] = (float)c->route[s][d];
+    }
+    a->accel_mul = c->accel_mul;
     a->sens_lo_rate = c->sens_lo_rate;
     a->sens_hi_rate = c->sens_hi_rate;
-    a->vert_scale = c->vert_scale;
-
-    /* The sign lives here: the stub must not negate a float. */
-    a->invert_yaw = c->invert_yaw ? -1.0f : 1.0f;
-    a->invert_pitch = c->invert_pitch ? -1.0f : 1.0f;
 
     a->max_turn = c->max_turn;
     a->tighten = c->tighten;
@@ -399,13 +403,10 @@ void ga_config_title_path(const char *title, char *out, size_t n)
 
 #define FIELDS(I, F, U)                                 \
     I("enabled", enabled)                               \
-    I("target", target)                                 \
     I("space", space)                                    \
     I("activation", activation)                          \
     I("trigger_right", trigger_right)                    \
     I("trigger_threshold", trigger_threshold)            \
-    I("invert_yaw", invert_yaw)                          \
-    I("invert_pitch", invert_pitch)                      \
     I("axis_yaw", axis_yaw)                              \
     I("axis_pitch", axis_pitch)                          \
     I("axis_roll", axis_roll)                            \
@@ -414,11 +415,24 @@ void ga_config_title_path(const char *title, char *out, size_t n)
     I("calibrate", calibrate)                            \
     I("rumble", rumble)                                  \
     I("rumble_period_ms", rumble_period_ms)              \
-    F("sens_min", sens_min)                              \
-    F("sens_max", sens_max)                              \
+    F("accel_mul", accel_mul)                            \
     F("sens_lo_rate", sens_lo_rate)                      \
     F("sens_hi_rate", sens_hi_rate)                      \
-    F("vert_scale", vert_scale)                          \
+    F("strength_yaw", strength[GA_SRC_YAW])              \
+    F("strength_pitch", strength[GA_SRC_PITCH])          \
+    F("strength_roll", strength[GA_SRC_ROLL])            \
+    I("route_yaw_rx", route[GA_SRC_YAW][GA_OUT_RIGHT_X]) \
+    I("route_yaw_ry", route[GA_SRC_YAW][GA_OUT_RIGHT_Y]) \
+    I("route_yaw_lx", route[GA_SRC_YAW][GA_OUT_LEFT_X])  \
+    I("route_yaw_ly", route[GA_SRC_YAW][GA_OUT_LEFT_Y])  \
+    I("route_pitch_rx", route[GA_SRC_PITCH][GA_OUT_RIGHT_X]) \
+    I("route_pitch_ry", route[GA_SRC_PITCH][GA_OUT_RIGHT_Y]) \
+    I("route_pitch_lx", route[GA_SRC_PITCH][GA_OUT_LEFT_X])  \
+    I("route_pitch_ly", route[GA_SRC_PITCH][GA_OUT_LEFT_Y])  \
+    I("route_roll_rx", route[GA_SRC_ROLL][GA_OUT_RIGHT_X])   \
+    I("route_roll_ry", route[GA_SRC_ROLL][GA_OUT_RIGHT_Y])   \
+    I("route_roll_lx", route[GA_SRC_ROLL][GA_OUT_LEFT_X])    \
+    I("route_roll_ly", route[GA_SRC_ROLL][GA_OUT_LEFT_Y])    \
     F("max_turn", max_turn)                              \
     F("game_deadzone", game_deadzone)                    \
     F("game_outer", game_outer)                          \

@@ -6,6 +6,7 @@
  * the directories pldmgr reads are world-writable.
  */
 #include "service.hpp"
+#include "version_service.h"
 
 #include <arpa/inet.h>
 #include <cstdio>
@@ -21,6 +22,9 @@ namespace gyroaim
 namespace
 {
 constexpr int connect_timeout_ms = 1500;
+
+bool copy_file(const char *from, const char *to, char *why,
+               std::size_t why_len);
 
 int dial(int port)
 {
@@ -134,6 +138,68 @@ bool query(Status &out)
     json_string(body, "title", out.game, sizeof(out.game));
     json_string(body, "status", out.text, sizeof(out.text));
     return true;
+}
+
+const char *bundled_version()
+{
+    return GA_VERSION;
+}
+
+int match_bundled_version(char *what, std::size_t what_len)
+{
+    Status state{};
+    char why[96];
+    int changed = 0;
+
+    bool running = query(state);
+    bool stale = running && std::strcmp(state.version, GA_VERSION) != 0;
+
+    /* The boot copy is refreshed whenever one exists, because its version
+     * cannot be read without running it. Overwriting a few hundred kilobytes
+     * is cheaper than being wrong about it. */
+    struct stat st{};
+    if (::stat(autostart_elf, &st) == 0) {
+        if (copy_file(bundled_service, autostart_elf, why, sizeof(why)))
+            changed = 1;
+        else
+            ::snprintf(what, what_len, "could not refresh the startup copy");
+    }
+
+    if (stale) {
+        if (!start_service(why, sizeof(why))) {
+            std::snprintf(what, what_len,
+                          "the service is version %s but this app carries %s, "
+                          "and replacing it failed", state.version,
+                          GA_VERSION);
+            return -1;
+        }
+        /* The replacement takes the port from the old one, which stands down. */
+        for (int i = 0; i < 20; i++) {
+            usleep(500000);
+            Status after{};
+            if (query(after) && std::strcmp(after.version, GA_VERSION) == 0) {
+                std::snprintf(what, what_len,
+                              "updated the service from %s to %s",
+                              state.version, GA_VERSION);
+                return 1;
+            }
+        }
+        std::snprintf(what, what_len,
+                      "asked the service to update to %s but it still "
+                      "reports %s", GA_VERSION, state.version);
+        return -1;
+    }
+
+    if (changed) {
+        std::snprintf(what, what_len, "refreshed the startup copy to %s",
+                      GA_VERSION);
+        return 1;
+    }
+    if (running)
+        std::snprintf(what, what_len, "the service is already %s", GA_VERSION);
+    else
+        std::snprintf(what, what_len, "nothing to update");
+    return 0;
 }
 
 bool stop_service()

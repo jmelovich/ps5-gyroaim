@@ -151,6 +151,85 @@ int main(void)
     run(&a, &x, &y);
     check("both rightward goes further right", x > 180, x, 220);
 
+    printf("a rotation can be routed anywhere, and to more than one place\n");
+
+    /* Turning drives the LEFT stick sideways instead of the right one. */
+    ga_config_defaults(&c);
+    c.activation = GA_ACT_ALWAYS;
+    c.tighten = 0.0f;
+    c.smooth_rate = 0.0f;
+    c.carry_cap = 0.0f;
+    c.space = GA_SPACE_LOCAL;
+    c.calibrate = 0;
+    memset(c.route, 0, sizeof(c.route));
+    c.route[GA_SRC_YAW][GA_OUT_LEFT_X] = -1;
+    ga_config_clamp(&c);
+    sample_reset();
+    set_float(GA_OFF_ANGVEL + 4, 1.0f);          /* turning left */
+    prepare(&a, &c);
+    {
+        uint8_t buf[GA_PAD_SIZE];
+        uint64_t when = 1000000;
+        for (int i = 0; i < 24; i++) {
+            sample_timestamp(when);
+            when += 8000;
+            memset(buf, 0, sizeof(buf));
+            ga_stub_read_state(1, buf, &a);
+        }
+        check("turning moves the left stick left", buf[GA_OFF_LX] < 120,
+              buf[GA_OFF_LX], 100);
+        check("and leaves the right stick alone", buf[GA_OFF_RX] == 128,
+              buf[GA_OFF_RX], 128);
+    }
+
+    /* One rotation feeding both sticks at once. */
+    memset(c.route, 0, sizeof(c.route));
+    c.route[GA_SRC_YAW][GA_OUT_RIGHT_X] = 1;
+    c.route[GA_SRC_YAW][GA_OUT_LEFT_X] = -1;
+    ga_config_clamp(&c);
+    sample_reset();
+    set_float(GA_OFF_ANGVEL + 4, 1.0f);
+    prepare(&a, &c);
+    {
+        uint8_t buf[GA_PAD_SIZE];
+        uint64_t when = 1000000;
+        for (int i = 0; i < 24; i++) {
+            sample_timestamp(when);
+            when += 8000;
+            memset(buf, 0, sizeof(buf));
+            ga_stub_read_state(1, buf, &a);
+        }
+        check("one rotation drives both sticks", buf[GA_OFF_RX] > 136 &&
+                                                 buf[GA_OFF_LX] < 120,
+              buf[GA_OFF_RX], 160);
+        check("and in opposite directions as asked",
+              buf[GA_OFF_RX] > 128 && buf[GA_OFF_LX] < 128, buf[GA_OFF_LX], 100);
+    }
+
+    /* Split: turning on one stick, tilting on the other. */
+    memset(c.route, 0, sizeof(c.route));
+    c.route[GA_SRC_YAW][GA_OUT_LEFT_X] = 1;
+    c.route[GA_SRC_PITCH][GA_OUT_RIGHT_Y] = 1;
+    ga_config_clamp(&c);
+    sample_reset();
+    set_float(GA_OFF_ANGVEL + 4, 1.0f);          /* turn */
+    set_float(GA_OFF_ANGVEL, 1.0f);              /* and tilt up */
+    prepare(&a, &c);
+    {
+        uint8_t buf[GA_PAD_SIZE];
+        uint64_t when = 1000000;
+        for (int i = 0; i < 24; i++) {
+            sample_timestamp(when);
+            when += 8000;
+            memset(buf, 0, sizeof(buf));
+            ga_stub_read_state(1, buf, &a);
+        }
+        check("split: turning went to the left stick", buf[GA_OFF_LX] > 136,
+              buf[GA_OFF_LX], 160);
+        check("split: tilting went to the right stick", buf[GA_OFF_RY] < 120,
+              buf[GA_OFF_RY], 100);
+    }
+
     printf("parking it leaves the sample alone\n");
     sample_reset();
     g_sample[GA_OFF_RY] = 200;

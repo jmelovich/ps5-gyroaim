@@ -36,6 +36,10 @@ all: dist
 service:
 	@$(MAKE) --no-print-directory -C $(ROOT)/payload
 	@cp $(ROOT)/payload/gyroaim.elf $(ROOT)/app/gyroaim.elf
+	@# The panel compares the running service against the one it carries, so it
+	@# needs that version at compile time. Copied rather than included across
+	@# the tree, because the app is built from inside the boilerplate's checkout.
+	@cp $(ROOT)/payload/version.h $(ROOT)/app/src/version_service.h
 
 dist: service
 	@test -d $(BP) || { echo "run tools/setup-app-deps.sh first" >&2; exit 2; }

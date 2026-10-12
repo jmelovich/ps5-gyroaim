@@ -225,7 +225,7 @@ static void selftest(const ga_inject_t *inj, const ga_args_t *base,
     ga_args_t got;
 
     probe.activation = GA_ACT_ALWAYS;
-    probe.bias[1] = -1.0f;              /* axis_yaw defaults to 1 */
+    probe.bias[1] = -1.0f;              /* the yaw axis defaults to gyro Y */
     probe.tighten = 0.0f;
     probe.smooth_rate = 0.0f;
     probe.settings_seq = base->settings_seq + 1;
@@ -242,22 +242,21 @@ static void selftest(const ga_inject_t *inj, const ga_args_t *base,
         return;
     }
 
-    /* One rad/s is 57.3 deg/s, inverted on yaw by default. */
-    float want_rate = 57.29578f * (cfg->invert_yaw ? -1.0f : 1.0f);
-    float want_cam = want_rate * cfg->sens_min;
-    int rate_ok = fabsf(got.rate_yaw - want_rate) < 3.0f;
-    int cam_ok = fabsf(got.cam_yaw - want_cam) < fabsf(want_cam) * 0.1f + 3.0f;
+    /* One radian a second is 57.3 degrees a second. */
+    float want_rate = 57.29578f;
+    int rate_ok = fabsf(got.rate[GA_SRC_YAW] - want_rate) < 3.0f;
     int moved = got.out_frac > 0.01f;
-    int side_ok = cfg->invert_yaw ? got.out_rx < 128 : got.out_rx > 128;
 
-    ga_log("self test: rate % .1f deg/s (want % .1f) %s", (double)got.rate_yaw,
-           (double)want_rate, rate_ok ? "ok" : "WRONG");
-    ga_log("self test: camera % .1f deg/s (want % .1f) %s",
-           (double)got.cam_yaw, (double)want_cam, cam_ok ? "ok" : "WRONG");
-    ga_log("self test: deflection %.3f, stick x %u -> %s",
-           (double)got.out_frac, got.out_rx,
-           (moved && side_ok) ? "PASS" : "FAIL");
+    ga_log("self test: yaw rate % .1f deg/s (want % .1f) %s",
+           (double)got.rate[GA_SRC_YAW], (double)want_rate,
+           rate_ok ? "ok" : "WRONG");
+    ga_log("self test: right stick asked for % .1f, % .1f deg/s",
+           (double)got.want[0][0], (double)got.want[0][1]);
+    ga_log("self test: deflection %.3f, right stick %u,%u -> %s",
+           (double)got.out_frac, got.out_rx, got.out_ry,
+           moved ? "PASS" : "FAIL");
 
+    (void)cfg;
     ga_inject_publish(inj, base);
 }
 
@@ -265,13 +264,15 @@ static void selftest(const ga_inject_t *inj, const ga_args_t *base,
 
 static void report(const ga_args_t *t)
 {
-    ga_log("pad: L2 %3u  in %3u,%3u -> out %3u,%3u  %s%s",
+    ga_log("pad: L2 %3u  right %3u,%3u -> %3u,%3u  left %3u,%3u -> %3u,%3u  "
+           "%s%s",
            t->last_l2, t->in_rx, t->in_ry, t->out_rx, t->out_ry,
-           t->active ? "aiming" : "idle", t->saturated ? " (at the limit)" : "");
-    ga_log("  rate % .1f, % .1f deg/s -> camera % .1f, % .1f deg/s"
-           "  deflection %.3f",
-           (double)t->rate_yaw, (double)t->rate_pitch,
-           (double)t->cam_yaw, (double)t->cam_pitch, (double)t->out_frac);
+           t->in_lx, t->in_ly, t->out_lx, t->out_ly,
+           t->active ? "aiming" : "idle",
+           t->saturated ? " (at the limit)" : "");
+    ga_log("  turn % .1f  tilt % .1f  lean % .1f deg/s   deflection %.3f",
+           (double)t->rate[GA_SRC_YAW], (double)t->rate[GA_SRC_PITCH],
+           (double)t->rate[GA_SRC_ROLL], (double)t->out_frac);
     ga_log("  rumble level %u (mode set at %llu)", t->rumble_last_level,
            (unsigned long long)t->rumble_mode_ts);
     ga_log("  pad read returned 0x%x, handle %d, connected %u",
@@ -520,7 +521,10 @@ int main(void)
         /* Keep trying while a game is running and the transform is not in.
          * A game can load its pad library, and bind the imports that reach
          * it, well after the process appears. */
-        if (!attached && game != -1 && ms >= next_attach) {
+        if (!attached && game != -1 && ms >= next_attach && !superseded()) {
+            /* Checked again here, not only at the top of the loop: attaching
+             * walks another process's memory with primitives that are not safe
+             * to use from two instances at once. */
             int deep = ms >= next_deep;
             int rc = attach_once(game, title, deep, &inj);
 

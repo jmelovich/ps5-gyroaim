@@ -79,6 +79,16 @@ padding:11px 15px;font:inherit;font-weight:600;font-size:15px}
 button.flat{background:var(--bg);color:var(--fg);border:1px solid var(--line)}
 .btns{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .note{color:var(--mut);font-size:12.5px;margin:8px 0 0}
+.grid{display:grid;grid-template-columns:auto repeat(4,1fr);gap:5px;
+align-items:center;margin:2px 0 4px}
+.grid .hd{font-size:10.5px;color:var(--mut);text-align:center;line-height:1.15;
+text-transform:uppercase;letter-spacing:.03em;padding-bottom:2px}
+.grid .rw{font-size:13.5px;padding-right:6px;white-space:nowrap}
+.cell{appearance:none;border:1px solid var(--line);background:var(--bg);
+color:var(--mut);border-radius:8px;padding:0;height:42px;font:inherit;
+font-size:19px;font-weight:600;line-height:1;text-align:center}
+.cell.on{border-color:var(--acc);color:#fff;background:var(--acc)}
+.cell.inv{border-color:var(--warn);color:#fff;background:var(--warn)}
 .on{color:var(--ok);font-weight:600}
 .warn{color:var(--warn);font-weight:600}
 .off{color:var(--mut)}
@@ -107,6 +117,12 @@ trail is the last few seconds.</p></div>
 The dashed line is the game's ceiling.</p></div>
 </div>
 </div></details></section>
+<section><details open><summary>Routing</summary><div class='body'>
+<div class='grid' id='routing'></div>
+<p class='note'>Tap a square to cycle it: blank, <b>+</b>, then <b>&minus;</b> for
+the other direction. A row can drive more than one control, so one rotation can
+move both sticks, and a column can be fed by more than one rotation.</p>
+</div></details></section>
 <div id='form'></div>
 <section><details><summary>Profile</summary><div class='body'>
 <div class='btns'>
@@ -118,16 +134,14 @@ The dashed line is the game's ceiling.</p></div>
 <p class='note'>No password. Anyone on this network can change these settings.</p>
 <script>
 var SPEC=[
-['Aim',1,[
+['Strength',1,[
 ['enabled','On','bool','Master switch for the whole transform.'],
-['target','Controls','sel',[[0,'Right stick'],[1,'Left stick']]],
-['sens_min','Sensitivity','num',0,8,0.05,'Camera degrees per degree of hand movement. 1.0 is one to one.'],
-['sens_max','Sensitivity when fast','num',0,8,0.05,'Set equal to the above for no acceleration.'],
-['sens_lo_rate','Slow below','num',0,200,1,'deg/s'],
-['sens_hi_rate','Fast above','num',0,400,1,'deg/s'],
-['vert_scale','Vertical scale','num',0.1,3,0.05,'Pitch relative to yaw.'],
-['invert_yaw','Invert left and right','bool'],
-['invert_pitch','Invert up and down','bool']]],
+['strength_yaw','Turning','num',0,8,0.05,'Degrees of view per degree of hand movement. 1.0 is one to one.'],
+['strength_pitch','Tilting','num',0,8,0.05],
+['strength_roll','Leaning','num',0,8,0.05],
+['accel_mul','Acceleration','num',0.5,4,0.05,'Multiplier once the hands are moving fast. 1.0 is none.'],
+['sens_lo_rate','Ramp starts at','num',0,200,1,'deg/s'],
+['sens_hi_rate','Fully applied at','num',0,400,1,'deg/s']]],
 ["The game's camera",1,[
 ['max_turn','Full-stick turn rate','num',20,1200,5,'Hold the stick fully right, time one full revolution, enter deg/s. Everything else depends on this.'],
 ['game_deadzone','Stick deadzone','num',0,0.6,0.01,'Fraction of travel the game ignores at the centre.'],
@@ -156,9 +170,35 @@ var SPEC=[
 ['rumble_scale','Strength','num',0,1.5,0.05],
 ['rumble_period_ms','Minimum interval','num',16,400,4,'milliseconds']]]
 ];
+var SRC=[['yaw','Turning'],['pitch','Tilting'],['roll','Leaning']];
+var DST=[['rx','Right<br>stick &#8646;'],['ry','Right<br>stick &#8645;'],
+['lx','Left<br>stick &#8646;'],['ly','Left<br>stick &#8645;']];
+var ROUTE=[];
+SRC.forEach(function(s){DST.forEach(function(d){ROUTE.push('route_'+s[0]+'_'+d[0])})});
 var K=[],META={},busy=0,pending=0,cfg=null,live=null,trail=[];
 function el(i){return document.getElementById(i)}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')}
+function buildRouting(){
+var h="<div class='hd'></div>";
+DST.forEach(function(d){h+="<div class='hd'>"+d[1]+'</div>'});
+SRC.forEach(function(s){
+h+="<div class='rw'>"+s[1]+'</div>';
+DST.forEach(function(d){
+h+="<button class='cell' id='route_"+s[0]+'_'+d[0]+"'>&middot;</button>"})});
+el('routing').innerHTML=h;
+ROUTE.forEach(function(k){
+el(k).addEventListener('click',function(){
+/* blank, then on, then inverted, so the common case is one tap. */
+var cur=parseInt(el(k).dataset.v||'0',10);
+setCell(k,cur===0?1:(cur===1?-1:0));
+put()})});
+}
+function setCell(k,v){
+var e=el(k);
+e.dataset.v=v;
+e.textContent=v>0?'+':(v<0?'\u2212':'\u00b7');
+e.className='cell'+(v>0?' on':(v<0?' inv':''));
+}
 function build(){
 var h='';
 SPEC.forEach(function(g,gi){
@@ -203,12 +243,16 @@ if(busy){pending=1;return}
 busy=1;
 var q=K.map(function(k){
 var e=el(k);
-return k+'='+(e.type==='checkbox'?(e.checked?1:0):e.value)}).join('&');
+return k+'='+(e.type==='checkbox'?(e.checked?1:0):e.value)})
+.concat(ROUTE.map(function(k){
+return k+'='+(parseInt(el(k).dataset.v||'0',10))})).join('&');
 fetch('/api/set?'+q).then(function(r){return r.json()}).then(function(j){
 apply(j.config)}).catch(function(){}).then(function(){
 busy=0;if(pending){pending=0;put()}})}
 function apply(c){
 cfg=c;
+ROUTE.forEach(function(k){
+if(el(k)&&c[k]!==undefined)setCell(k,c[k])});
 K.forEach(function(k){
 var e=el(k),n=el('n_'+k);
 if(document.activeElement===e||document.activeElement===n)return;
@@ -224,10 +268,11 @@ var t=(d-dz)/liv;
 if(t<=0)return 0;if(t>=1)return 1;
 return Math.pow(t,power)}
 function sensAt(r,c){
-if(c.sens_hi_rate<=c.sens_lo_rate)return c.sens_min;
+var base=Math.max(c.strength_yaw,c.strength_pitch,c.strength_roll);
+if(c.sens_hi_rate<=c.sens_lo_rate)return base;
 var t=(r-c.sens_lo_rate)/(c.sens_hi_rate-c.sens_lo_rate);
 t=Math.max(0,Math.min(1,t));
-return c.sens_min+(c.sens_max-c.sens_min)*t}
+return base*(1+(c.accel_mul-1)*t)}
 function px(cv){
 var r=cv.getBoundingClientRect(),dpr=window.devicePixelRatio||1;
 var w=Math.max(200,Math.round(r.width)),h=Math.round(w*0.66);
@@ -304,8 +349,8 @@ var r=hiX*i/100;
 if(i)g.lineTo(X(r),Y(r*sensAt(r,cfg)));else g.moveTo(X(r),Y(r*sensAt(r,cfg)))}
 g.stroke();
 if(live){
-var hr=Math.hypot(live.rate_yaw,live.rate_pitch);
-var cr=Math.hypot(live.cam_yaw,live.cam_pitch);
+var hr=Math.hypot(live.rate[0],live.rate[1]);
+var cr=Math.hypot(live.want[0][0],live.want[0][1]);
 g.fillStyle=warn;g.beginPath();g.arc(X(hr),Y(cr),4.5,0,6.3);g.fill();
 g.strokeStyle='#fff';g.lineWidth=1.5;g.stroke()}}
 function tick(){
@@ -316,8 +361,8 @@ el('statusText').textContent=j.status;
 el('where').textContent=j.title?('game '+j.title):'';
 el('pathNote').textContent='Settings are being kept in '+j.path;
 var d=el('dot');
-if(!j.live){d.className='';['v_state','v_hand','v_cam','v_defl','v_in','v_out',
-'v_trig','v_drift'].forEach(function(i){el(i).textContent='-'});
+if(!j.live){d.className='';['l_act','l_ry','l_rp','l_rr','l_df','l_so','l_sl',
+'l_tg','l_bias'].forEach(function(i){if(el(i))el(i).textContent='-'});
 trail=[];drawCurve();drawSens();return}
 var L=j.live;
 d.className=L.saturated?'bad':(L.active?'aim':'live');
@@ -332,7 +377,7 @@ el('v_out').textContent=L.out_x+', '+L.out_y;
 el('v_trig').textContent='L2 '+L.l2+'  R2 '+L.r2;
 el('v_drift').textContent=L.cal_active?'aiming':(L.cal_count+' still');
 var camFrac=cfg.max_turn>0?
-Math.min(1,Math.hypot(L.cam_yaw,L.cam_pitch)/cfg.max_turn):0;
+Math.min(1,Math.hypot(L.want[0][0],L.want[0][1])/cfg.max_turn):0;
 trail.push([Math.min(1,L.out_frac),camFrac]);
 if(trail.length>90)trail.shift();
 drawCurve();drawSens();

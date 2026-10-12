@@ -142,14 +142,14 @@ static INLINE void feed_calibration(ga_args_t *a, const float av[3],
     a->cal_count = a->cal_count + 1;
 }
 
-/* Yaw and pitch in degrees a second, with the resting offset removed.
+/* The three rotations in degrees a second, with the resting offset removed.
  *
  * In player space the yaw component is taken around gravity rather than from
  * one fixed axis, so holding the pad tilted still turns the camera level.
  * Gravity comes from the accelerometer, which is only trustworthy when the
  * pad is not being shaken, hence the magnitude check. */
 static INLINE void rates(const ga_args_t *a, const float av[3],
-                         const float ac[3], float *out_yaw, float *out_pitch)
+                         const float ac[3], float out[GA_SRC_COUNT])
 {
     uint32_t iy = a->axis_yaw > 2 ? 1 : a->axis_yaw;
     uint32_t ip = a->axis_pitch > 2 ? 0 : a->axis_pitch;
@@ -184,64 +184,76 @@ static INLINE void rates(const ga_args_t *a, const float av[3],
         }
     }
 
-    *out_yaw = yaw * a->k.rad_to_deg * a->invert_yaw;
-    *out_pitch = pitch * a->k.rad_to_deg * a->invert_pitch;
+    out[GA_SRC_YAW] = yaw * a->k.rad_to_deg;
+    out[GA_SRC_PITCH] = pitch * a->k.rad_to_deg;
+    out[GA_SRC_ROLL] = w[ir] * a->k.rad_to_deg;
 }
 
-/* Tremor handling: pull very slow rates toward zero, and blend slow rates
- * with a short running average so fine aim is steady without blunting a
- * flick. */
-static INLINE void steady(ga_args_t *a, float *yaw, float *pitch)
+/* Tremor handling: pull very slow rotation toward zero, and blend slow
+ * rotation with a short running average so fine aim is steady without
+ * blunting a flick. Applied to the rotations rather than to any one output,
+ * so it behaves the same however they are routed. */
+static INLINE void steady(ga_args_t *a, float rate[GA_SRC_COUNT])
 {
-    float mag = __builtin_sqrtf(*yaw * *yaw + *pitch * *pitch);
+    float mag = a->k.zero;
+
+    for (int i = 0; i < GA_SRC_COUNT; i++)
+        mag = mag + rate[i] * rate[i];
+    mag = __builtin_sqrtf(mag);
 
     if (a->tighten > a->k.eps && mag < a->tighten && mag > a->k.zero) {
         float scale = mag / a->tighten;
-        *yaw = *yaw * scale;
-        *pitch = *pitch * scale;
+        for (int i = 0; i < GA_SRC_COUNT; i++)
+            rate[i] = rate[i] * scale;
     }
 
-    uint32_t i = a->ring_i % GA_RING_N;
-    a->ring[i][0] = *yaw;
-    a->ring[i][1] = *pitch;
+    uint32_t slot = a->ring_i % GA_RING_N;
+    for (int i = 0; i < GA_SRC_COUNT; i++)
+        a->ring[slot][i] = rate[i];
     a->ring_i = a->ring_i + 1;
 
     if (a->smooth_rate <= a->k.eps)
         return;
 
-    float sy = a->k.zero, sp = a->k.zero;
-    for (int n = 0; n < GA_RING_N; n++) {
-        sy = sy + a->ring[n][0];
-        sp = sp + a->ring[n][1];
-    }
-    sy = sy * a->k.ring_inv;
-    sp = sp * a->k.ring_inv;
-
     /* Fully smoothed at half the threshold, fully direct at the threshold. */
     float half = a->smooth_rate * a->k.half;
     float direct = fclamp(a, (mag - half) / (a->smooth_rate - half),
                           a->k.zero, a->k.one);
-    *yaw = sy + (*yaw - sy) * direct;
-    *pitch = sp + (*pitch - sp) * direct;
+
+    for (int i = 0; i < GA_SRC_COUNT; i++) {
+        float mean = a->k.zero;
+        for (int n = 0; n < GA_RING_N; n++)
+            mean = mean + a->ring[n][i];
+        mean = mean * a->k.ring_inv;
+        rate[i] = mean + (rate[i] - mean) * direct;
+    }
 }
 
-/* Camera speed asked of the game, in degrees a second. Acceleration is a ramp
- * between two sensitivities over a band of hand speeds. */
-static INLINE void to_camera(const ga_args_t *a, float yaw, float pitch,
-                            float *cy, float *cp)
+/* How much everything is multiplied by, given how fast the hands are moving.
+ * Only the rotations that are actually routed count toward the speed, so an
+ * unused axis cannot trip the acceleration. */
+static INLINE float accel_factor(const ga_args_t *a,
+                                 const float rate[GA_SRC_COUNT])
 {
-    float mag = __builtin_sqrtf(yaw * yaw + pitch * pitch);
-    float sens = a->sens_min;
+    float mag = a->k.zero;
 
-    if (a->sens_hi_rate > a->sens_lo_rate) {
-        float t = fclamp(a, (mag - a->sens_lo_rate) /
-                             (a->sens_hi_rate - a->sens_lo_rate),
-                         a->k.zero, a->k.one);
-        sens = a->sens_min + (a->sens_max - a->sens_min) * t;
+    if (a->sens_hi_rate <= a->sens_lo_rate)
+        return a->k.one;
+
+    for (int i = 0; i < GA_SRC_COUNT; i++) {
+        int used = 0;
+        for (int d = 0; d < GA_OUT_COUNT; d++)
+            if (a->route[i][d] != a->k.zero)
+                used = 1;
+        if (used)
+            mag = mag + rate[i] * rate[i];
     }
+    mag = __builtin_sqrtf(mag);
 
-    *cy = yaw * sens;
-    *cp = pitch * sens * a->vert_scale;
+    float t = fclamp(a, (mag - a->sens_lo_rate) /
+                         (a->sens_hi_rate - a->sens_lo_rate),
+                     a->k.zero, a->k.one);
+    return a->k.one + (a->accel_mul - a->k.one) * t;
 }
 
 /* Rumble.
@@ -277,101 +289,26 @@ static INLINE void set_rumble(ga_args_t *a, int32_t handle, uint32_t level,
     ((vib_t)(uintptr_t)a->orig[GA_FN_SET_VIBRATION])(handle, motors);
 }
 
-static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
+/* Turns one stick's wanted camera speed into a deflection and writes it.
+ *
+ * Each stick is handled as a pair, because the game's deadzone and response
+ * curve act on how far the stick is pushed, not on one axis at a time. A stick
+ * with nothing routed to it is left exactly as the game delivered it.
+ *
+ * Returns how hard this stick ended up being pushed, 0 to 1.
+ */
+static INLINE float drive_stick(ga_args_t *a, uint8_t *data, unsigned stick,
+                                float vx, float vy, float dt)
 {
-    uint32_t age = __atomic_add_fetch(&a->age, 1u, __ATOMIC_RELAXED);
-    float av[3], ac[3];
+    int xoff = stick ? GA_OFF_LX : GA_OFF_RX;
+    int yoff = stick ? GA_OFF_LY : GA_OFF_RY;
 
-    for (int i = 0; i < 3; i++) {
-        av[i] = load_float(data + GA_OFF_ANGVEL + 4 * i);
-        ac[i] = load_float(data + GA_OFF_ACCEL + 4 * i);
-        a->last_angvel[i] = av[i];
-        a->last_accel[i] = ac[i];
-    }
-
-    int xoff = GA_OFF_RX, yoff = GA_OFF_RY;
-    if (a->target == GA_TARGET_LEFT_STICK) {
-        xoff = GA_OFF_LX;
-        yoff = GA_OFF_LY;
-    }
-
-    a->last_handle = handle;
-    a->last_buttons = load_u32(data + GA_OFF_BUTTONS);
-    a->last_l2 = data[GA_OFF_L2];
-    a->last_r2 = data[GA_OFF_R2];
-    a->in_rx = data[xoff];
-    a->in_ry = data[yoff];
-    a->connected = data[GA_OFF_CONNECTED];
-
-    uint64_t ts = load_u64(data + GA_OFF_TIMESTAMP);
-    a->last_timestamp = ts;
-
-    int active = a->enabled && age <= GA_STALE_READS && is_active(a, data);
-
-    feed_calibration(a, av, ac, active);
-
-    /* Time since the previous distinct sample. A game may read the pad more
-     * than once for the same sample, and carried motion must not be counted
-     * twice, so anything without a new timestamp advances no state. */
-    int fresh = ts != a->last_ts;
-    float dt = a->k.zero;
-    if (fresh && a->last_ts && ts > a->last_ts) {
-        uint64_t us = ts - a->last_ts;
-        if (us > 100000u)
-            us = 100000u;               /* a gap, not one long frame */
-        dt = (float)(uint32_t)us * a->k.us_to_s;
-    }
-    if (fresh)
-        a->last_ts = ts;
-
-    float yaw, pitch;
-    rates(a, av, ac, &yaw, &pitch);
-    a->rate_yaw = yaw;
-    a->rate_pitch = pitch;
-
-    if (!active) {
-        a->active = 0;
-        a->saturated = 0;
-        a->cam_yaw = a->k.zero;
-        a->cam_pitch = a->k.zero;
-        a->out_frac = a->k.zero;
-        a->out_rx = data[xoff];
-        a->out_ry = data[yoff];
-        /* Leaving the carry and the ring behind would deliver a stale flick
-         * the next time aiming starts. */
-        a->carry[0] = a->k.zero;
-        a->carry[1] = a->k.zero;
-        for (int n = 0; n < GA_RING_N; n++) {
-            a->ring[n][0] = a->k.zero;
-            a->ring[n][1] = a->k.zero;
-        }
-        /* Letting go must stop the motors, or they stay on at whatever level
-         * the last aiming frame asked for. */
-        if (a->rumble_last_level && fresh)
-            set_rumble(a, handle, 0, ts);
-        __atomic_add_fetch(&a->sample_seq, 1u, __ATOMIC_RELAXED);
-        return;
-    }
-
-    if (fresh)
-        steady(a, &yaw, &pitch);
-
-    float cam_yaw, cam_pitch;
-    to_camera(a, yaw, pitch, &cam_yaw, &cam_pitch);
-    a->cam_yaw = cam_yaw;
-    a->cam_pitch = cam_pitch;
-
-    /* What the physical stick is already asking the camera to do. Running it
-     * through the game's own curve first is what lets the two be added
+    /* What the hands are already asking for through the stick itself. Running
+     * it through the game's own curve first is what lets the two be added
      * without the curve landing on the gyro's contribution twice.
      *
-     * Mind the two coordinate systems. A stick's vertical axis grows
-     * downward, so a value above centre means pushed down; camera pitch grows
-     * upward, so positive means looking up. The stick's vertical contribution
-     * is therefore subtracted, not added. Getting this wrong inverts the
-     * right stick's up and down, but only while the gyro is engaged, since
-     * the sample passes through untouched otherwise. */
-    float vx = cam_yaw, vy = cam_pitch;
+     * Mind the two frames: a stick's vertical axis grows downward, while the
+     * camera's grows upward, so the stick's vertical part is subtracted. */
     if (a->merge_stick) {
         float sx = (float)((int)data[xoff] - 128) / a->k.counts;
         float sy = (float)((int)data[yoff] - 128) / a->k.counts;
@@ -384,9 +321,9 @@ static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
         }
     }
 
-    /* A flick can ask for more than the camera can do. Hold the excess back
-     * in stick-seconds and pay it out once the demand drops, so the turn
-     * still arrives; moving back the other way cancels it. */
+    /* A flick can ask for more than the game can turn. Hold the excess back in
+     * stick-seconds and pay it out once the demand drops, so the movement
+     * still arrives; going back the other way cancels it. */
     float want = __builtin_sqrtf(vx * vx + vy * vy);
     float frac = a->max_turn > a->k.eps ? want / a->max_turn : a->k.zero;
 
@@ -395,51 +332,49 @@ static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
         float diry = want > a->k.eps ? vy / want : a->k.zero;
 
         if (frac > a->k.one) {
-            a->carry[0] = a->carry[0] + dirx * (frac - a->k.one) * dt;
-            a->carry[1] = a->carry[1] + diry * (frac - a->k.one) * dt;
+            a->carry[stick][0] = a->carry[stick][0] +
+                                 dirx * (frac - a->k.one) * dt;
+            a->carry[stick][1] = a->carry[stick][1] +
+                                 diry * (frac - a->k.one) * dt;
             frac = a->k.one;
         } else {
-            float cm = __builtin_sqrtf(a->carry[0] * a->carry[0] +
-                                       a->carry[1] * a->carry[1]);
+            float cm = __builtin_sqrtf(a->carry[stick][0] * a->carry[stick][0] +
+                                       a->carry[stick][1] * a->carry[stick][1]);
             if (cm > a->k.eps) {
                 float room = a->k.one - frac;
                 float pay = cm / dt;
                 if (pay > room)
                     pay = room;
-                vx = vx + a->carry[0] / cm * pay * a->max_turn;
-                vy = vy + a->carry[1] / cm * pay * a->max_turn;
+                vx = vx + a->carry[stick][0] / cm * pay * a->max_turn;
+                vy = vy + a->carry[stick][1] / cm * pay * a->max_turn;
                 float scale = (cm - pay * dt) / cm;
                 if (scale < a->k.zero)
                     scale = a->k.zero;
-                a->carry[0] = a->carry[0] * scale;
-                a->carry[1] = a->carry[1] * scale;
+                a->carry[stick][0] = a->carry[stick][0] * scale;
+                a->carry[stick][1] = a->carry[stick][1] * scale;
                 want = __builtin_sqrtf(vx * vx + vy * vy);
                 frac = want / a->max_turn;
             }
         }
 
-        float cm = __builtin_sqrtf(a->carry[0] * a->carry[0] +
-                                   a->carry[1] * a->carry[1]);
+        float cm = __builtin_sqrtf(a->carry[stick][0] * a->carry[stick][0] +
+                                   a->carry[stick][1] * a->carry[stick][1]);
         if (cm > a->carry_cap && cm > a->k.eps) {
             float s = a->carry_cap / cm;
-            a->carry[0] = a->carry[0] * s;
-            a->carry[1] = a->carry[1] * s;
+            a->carry[stick][0] = a->carry[stick][0] * s;
+            a->carry[stick][1] = a->carry[stick][1] * s;
         }
     }
 
-    a->saturated = frac >= a->k.one ? 1 : 0;
-    frac = fclamp(a, frac, a->k.zero, a->k.one);
+    float clamped = fclamp(a, frac, a->k.zero, a->k.one);
 
-    /* Back to a deflection, through the inverse of the game's own curve so
-     * the camera actually moves at the speed asked for. */
-    float out = frac > a->k.eps ? lut(a, a->lut_to_stick, frac) : a->k.zero;
-    a->out_frac = out;
-
+    /* Back to a deflection, through the inverse of the game's own curve, so
+     * the view actually moves at the speed asked for. */
+    float out = clamped > a->k.eps ? lut(a, a->lut_to_stick, clamped)
+                                   : a->k.zero;
     int nx = 128, ny = 128;
+
     if (out > a->k.eps && want > a->k.eps) {
-        /* Clamped here, in float, rather than left to the integer clamp
-         * below: letting the compiler fold the two gave it an excuse to park
-         * the limit in a constant pool. */
         float px = fclamp(a, vx / want * out * a->k.counts,
                           a->k.neg_counts, a->k.counts);
         float py = fclamp(a, vy / want * out * a->k.counts,
@@ -453,15 +388,140 @@ static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
     uint8_t by = to_axis(ny);
     data[xoff] = bx;
     data[yoff] = by;
-    a->out_rx = bx;
-    a->out_ry = by;
+
+    if (stick) {
+        a->out_lx = bx;
+        a->out_ly = by;
+    } else {
+        a->out_rx = bx;
+        a->out_ry = by;
+    }
+    return frac;
+}
+
+static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
+{
+    uint32_t age = __atomic_add_fetch(&a->age, 1u, __ATOMIC_RELAXED);
+    float av[3], ac[3];
+    float rate[GA_SRC_COUNT];
+
+    for (int i = 0; i < 3; i++) {
+        av[i] = load_float(data + GA_OFF_ANGVEL + 4 * i);
+        ac[i] = load_float(data + GA_OFF_ACCEL + 4 * i);
+        a->last_angvel[i] = av[i];
+        a->last_accel[i] = ac[i];
+    }
+
+    a->last_handle = handle;
+    a->last_buttons = load_u32(data + GA_OFF_BUTTONS);
+    a->last_l2 = data[GA_OFF_L2];
+    a->last_r2 = data[GA_OFF_R2];
+    a->in_rx = data[GA_OFF_RX];
+    a->in_ry = data[GA_OFF_RY];
+    a->in_lx = data[GA_OFF_LX];
+    a->in_ly = data[GA_OFF_LY];
+    a->connected = data[GA_OFF_CONNECTED];
+
+    uint64_t ts = load_u64(data + GA_OFF_TIMESTAMP);
+    a->last_timestamp = ts;
+
+    int active = a->enabled && age <= GA_STALE_READS && is_active(a, data);
+
+    feed_calibration(a, av, ac, active);
+
+    /* Time since the previous distinct sample. A game may read the pad more
+     * than once for the same sample, and carried movement must not be counted
+     * twice, so anything without a new timestamp advances no state. */
+    int fresh = ts != a->last_ts;
+    float dt = a->k.zero;
+    if (fresh && a->last_ts && ts > a->last_ts) {
+        uint64_t us = ts - a->last_ts;
+        if (us > 100000u)
+            us = 100000u;               /* a gap, not one long frame */
+        dt = (float)(uint32_t)us * a->k.us_to_s;
+    }
+    if (fresh)
+        a->last_ts = ts;
+
+    rates(a, av, ac, rate);
+    for (int i = 0; i < GA_SRC_COUNT; i++)
+        a->rate[i] = rate[i];
+
+    if (!active) {
+        a->active = 0;
+        a->saturated = 0;
+        a->out_frac = a->k.zero;
+        a->out_rx = data[GA_OFF_RX];
+        a->out_ry = data[GA_OFF_RY];
+        a->out_lx = data[GA_OFF_LX];
+        a->out_ly = data[GA_OFF_LY];
+        for (unsigned s = 0; s < GA_STICK_COUNT; s++) {
+            a->want[s][0] = a->k.zero;
+            a->want[s][1] = a->k.zero;
+            /* Leaving the carry behind would deliver a stale flick the next
+             * time aiming starts. */
+            a->carry[s][0] = a->k.zero;
+            a->carry[s][1] = a->k.zero;
+        }
+        for (int n = 0; n < GA_RING_N; n++)
+            for (int i = 0; i < GA_SRC_COUNT; i++)
+                a->ring[n][i] = a->k.zero;
+        if (a->rumble_last_level && fresh)
+            set_rumble(a, handle, 0, ts);
+        __atomic_add_fetch(&a->sample_seq, 1u, __ATOMIC_RELAXED);
+        return;
+    }
+
+    if (fresh)
+        steady(a, rate);
+
+    float accel = accel_factor(a, rate);
+    float busiest = a->k.zero;
+
+    for (unsigned s = 0; s < GA_STICK_COUNT; s++) {
+        float vx = a->k.zero, vy = a->k.zero;
+        int routed = 0;
+
+        for (int i = 0; i < GA_SRC_COUNT; i++) {
+            float gx = a->route[i][GA_OUT_OF(s, 0)];
+            float gy = a->route[i][GA_OUT_OF(s, 1)];
+
+            if (gx != a->k.zero || gy != a->k.zero)
+                routed = 1;
+            float scaled = rate[i] * a->strength[i] * accel;
+            vx = vx + gx * scaled;
+            vy = vy + gy * scaled;
+        }
+
+        a->want[s][0] = vx;
+        a->want[s][1] = vy;
+
+        if (!routed) {
+            /* Nothing points here, so the game keeps what it delivered. */
+            if (s) {
+                a->out_lx = data[GA_OFF_LX];
+                a->out_ly = data[GA_OFF_LY];
+            } else {
+                a->out_rx = data[GA_OFF_RX];
+                a->out_ry = data[GA_OFF_RY];
+            }
+            continue;
+        }
+
+        float frac = drive_stick(a, data, s, vx, vy, dt);
+        if (frac > busiest)
+            busiest = frac;
+    }
+
+    a->saturated = busiest >= a->k.one ? 1 : 0;
+    a->out_frac = fclamp(a, busiest, a->k.zero, a->k.one);
     a->active = 1;
 
-    /* Rumble that rises with how hard the camera is being turned. Rate
-     * limited, and only sent when the level actually changes, because this
-     * calls back into Sony's library from the game's own thread. */
+    /* Rumble that rises with how hard the controls are being pushed. Rate
+     * limited, and only sent when the level changes, because this calls back
+     * into Sony's library from the game's own thread. */
     if (a->rumble && fresh) {
-        uint32_t level = (uint32_t)(frac * a->rumble_scale * a->k.full);
+        uint32_t level = (uint32_t)(a->out_frac * a->rumble_scale * a->k.full);
         if (level > 255u)
             level = 255u;
         uint32_t gap = a->rumble_period_ms * 1000u;

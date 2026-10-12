@@ -261,9 +261,25 @@ void *worker(void *)
 {
     char why[96];
 
-    panel_log("[GAPANEL] worker started");
+    panel_log("[GAPANEL] worker started, this app carries service %s",
+              gyroaim::bundled_version());
     bool have_address = gyroaim::local_address(address, sizeof(address));
     panel_log("[GAPANEL] address %s", have_address ? address : "unknown");
+
+    /* Before anything else: make the console's service match the copy in this
+     * app. Updating the app otherwise leaves an older service running, and an
+     * older one set to start at boot, with nothing to say so. */
+    {
+        char what[96];
+        int rc = gyroaim::match_bundled_version(what, sizeof(what));
+        panel_log("[GAPANEL] version check: %d (%s)", rc, what);
+        if (rc != 0) {
+            char shouted[96];
+            std::snprintf(shouted, sizeof(shouted), "%s", what);
+            shout(shouted);
+            set_message(shouted);
+        }
+    }
 
     bool said = false;
     for (;;) {

@@ -3,7 +3,7 @@
 
 /* Reported by the portal so the control panel can tell whether the service
  * running on the console matches the one it has bundled. */
-#define GA_VERSION "1.0.0"
+#define GA_VERSION "1.0.1"
 
 /* The control panel is a title like any other, so it appears as a running
  * game and would otherwise get the transform installed into it. Hooking our

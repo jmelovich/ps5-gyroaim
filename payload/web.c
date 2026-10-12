@@ -102,17 +102,21 @@ static int state_json(ga_web_state_t *st, char *out, size_t n)
     const ga_args_t *l = &st->live;
     w += snprintf(out + w, n - (size_t)w,
                   "{\"active\":%u,\"saturated\":%u,"
-                  "\"rate_yaw\":%.2f,\"rate_pitch\":%.2f,"
-                  "\"cam_yaw\":%.2f,\"cam_pitch\":%.2f,\"out_frac\":%.4f,"
-                  "\"in_x\":%u,\"in_y\":%u,\"out_x\":%u,\"out_y\":%u,"
+                  "\"rate\":[%.2f,%.2f,%.2f],"
+                  "\"want\":[[%.2f,%.2f],[%.2f,%.2f]],"
+                  "\"out_frac\":%.4f,"
+                  "\"in\":[%u,%u,%u,%u],\"out\":[%u,%u,%u,%u],"
                   "\"l2\":%u,\"r2\":%u,\"buttons\":%u,"
                   "\"cal_count\":%u,\"cal_active\":%u,\"rumble_level\":%u,"
                   "\"calls\":%llu,\"applied\":%llu}}",
                   l->active, l->saturated,
-                  (double)l->rate_yaw, (double)l->rate_pitch,
-                  (double)l->cam_yaw, (double)l->cam_pitch,
+                  (double)l->rate[GA_SRC_YAW], (double)l->rate[GA_SRC_PITCH],
+                  (double)l->rate[GA_SRC_ROLL],
+                  (double)l->want[0][0], (double)l->want[0][1],
+                  (double)l->want[1][0], (double)l->want[1][1],
                   (double)l->out_frac,
-                  l->in_rx, l->in_ry, l->out_rx, l->out_ry,
+                  l->in_rx, l->in_ry, l->in_lx, l->in_ly,
+                  l->out_rx, l->out_ry, l->out_lx, l->out_ly,
                   l->last_l2, l->last_r2, l->last_buttons,
                   l->cal_count, l->cal_was_active, l->rumble_last_level,
                   (unsigned long long)l->calls,

@@ -20,7 +20,6 @@
 typedef struct {
     /* what it does */
     int   enabled;
-    int   target;              /* GA_TARGET_* */
     int   space;               /* GA_SPACE_* */
 
     /* when it applies */
@@ -29,17 +28,23 @@ typedef struct {
     int   trigger_threshold;   /* 1-255 */
     uint32_t activation_mask;  /* button bits for GA_ACT_BUTTON */
 
-    /* how much. Sensitivity is camera degrees per degree of hand movement,
-     * so 1.0 is a one-to-one turn. Two values with a speed band between them
-     * give acceleration; equal values give none. */
-    float sens_min;
-    float sens_max;
-    float sens_lo_rate;        /* deg/s at which sens_min applies */
-    float sens_hi_rate;        /* deg/s at which sens_max applies */
-    float vert_scale;          /* pitch relative to yaw */
-    int   invert_yaw;
-    int   invert_pitch;
-    int   axis_yaw;            /* 0 x, 1 y, 2 z */
+    /* Where each rotation goes: route[source][destination] is -1, 0 or +1.
+     * A rotation may drive several controls and a control may be driven by
+     * several rotations, which is what allows the two sticks to be split
+     * between axes. */
+    int   route[GA_SRC_COUNT][GA_OUT_COUNT];
+
+    /* How much, per rotation, in camera degrees per degree of hand movement,
+     * so 1.0 moves the view as far as the hands move. */
+    float strength[GA_SRC_COUNT];
+
+    /* Acceleration: multiply by 1 below lo_rate, rising to accel_mul at
+     * hi_rate. A multiplier of 1 means none. */
+    float accel_mul;
+    float sens_lo_rate;        /* deg/s where the ramp starts */
+    float sens_hi_rate;        /* deg/s where it is fully applied */
+
+    int   axis_yaw;            /* which gyro axis is which rotation: 0 x, 1 y, 2 z */
     int   axis_pitch;
     int   axis_roll;
 

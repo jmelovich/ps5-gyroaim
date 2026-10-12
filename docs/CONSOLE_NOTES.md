@@ -299,3 +299,24 @@ The finders now test an unrecognised slot value for the gateway shape,
 magic word. Finding one means an installation is already there and can be
 taken over rather than fought. The test is capped so a pointer-dense module
 cannot turn it into a sweep of its own.
+
+## Routing is a matrix, and the pipeline runs per stick
+
+Three rotations, yaw, pitch and roll, each route to four destinations: the two
+axes of each stick. A cell is +1, -1 or 0, so a rotation can drive several
+controls and a control can be fed by several rotations.
+
+The pipeline therefore runs once per stick rather than once overall. Each stick
+gets its own wanted velocity vector, its own merge with whatever the physical
+stick is asking for, and its own flick carry. Smoothing and tightening stay on
+the three rotations, which is where they belong: how steady a hand is does not
+depend on where its movement is routed.
+
+A stick with nothing routed to it is left exactly as the game delivered it. A
+stick with anything routed to it is owned as a pair, because the game's
+deadzone and curve act on how far it is pushed rather than on one axis, so an
+unrouted axis of a routed stick makes a round trip through the curve. The
+round-trip error is under half a percent, so it passes through intact.
+
+Signs live in the matrix as floats the stub multiplies by, since it still
+cannot negate one.

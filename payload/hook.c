@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <time.h>
 
 #ifdef __PROSPERO__
 #include <ps5/kernel.h>
@@ -506,17 +507,33 @@ static void note_orphan(pid_t pid, uint64_t value, ga_orphan_t *orphan,
 
 /* ---- finding slots by value ------------------------------------------- */
 
+static uint64_t now_ms(void)
+{
+    struct timespec ts;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)(ts.tv_nsec / 1000000);
+}
+
 int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max,
-                       ga_orphan_t *orphan)
+                       ga_orphan_t *orphan, ga_scan_cursor_t *cursor)
 {
     uint64_t head = 0;
     unsigned found = 0, objects = 0, scanned = 0, tests = 0;
+    uint64_t deadline = now_ms() + GA_SCAN_BUDGET_MS;
+    uint64_t resume_at = cursor ? cursor->offset : 0;
+    uint64_t resume_in = cursor ? cursor->mapbase : 0;
+    int reached = resume_in == 0;      /* nothing to skip past */
+    int ran_out = 0;
+    uint64_t paused_size = 0;
     uint8_t *chunk;
 
     if (!t || !out || !max)
         return -1;
     if (orphan)
         memset(orphan, 0, sizeof(*orphan));
+    if (cursor)
+        cursor->done = 0;
     if (find_object_list(t, &head) != 0)
         return -1;
     if (!(chunk = malloc(SCAN_CHUNK)))
@@ -538,23 +555,36 @@ int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max,
         if (!object_is_games_own(&o, path))
             continue;
 
-        if (o.mapsize > GA_SCAN_MAX_BYTES) {
-            ga_log("scan: skipping %s, 0x%llx bytes is too large to sweep; "
-                   "its relocation table is the way in",
-                   path[0] ? path : "<the executable>",
-                   (unsigned long long)o.mapsize);
-            continue;
+        /* Carry on from where the last pass stopped. */
+        if (!reached) {
+            if (o.mapbase != resume_in)
+                continue;
+            reached = 1;
         }
 
-        scanned++;
-        ga_log("scan: %s, 0x%llx bytes at 0x%llx",
-               path[0] ? path : "<the executable>",
-               (unsigned long long)o.mapsize,
-               (unsigned long long)o.mapbase);
+        uint64_t from = (o.mapbase == resume_in) ? resume_at : 0;
+        if (from == 0) {
+            scanned++;
+            ga_log("scan: %s, 0x%llx bytes at 0x%llx",
+                   path[0] ? path : "<the executable>",
+                   (unsigned long long)o.mapsize,
+                   (unsigned long long)o.mapbase);
+        }
 
-        for (uint64_t off = 0; off < o.mapsize && found < max &&
-                               !ga_hook_cancel;
+        for (uint64_t off = from; off < o.mapsize && found < max &&
+                                  !ga_hook_cancel;
              off += SCAN_CHUNK) {
+            /* Checked per chunk, so a large module is read across several
+             * passes instead of holding the service for minutes. */
+            if (now_ms() >= deadline) {
+                if (cursor) {
+                    cursor->mapbase = o.mapbase;
+                    cursor->offset = off;
+                }
+                paused_size = o.mapsize;
+                ran_out = 1;
+                break;
+            }
             size_t len = SCAN_CHUNK;
             if (off + len > o.mapsize)
                 len = (size_t)(o.mapsize - off);
@@ -627,8 +657,22 @@ int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max,
     }
 
     free(chunk);
-    ga_log("scan: %u object(s) scanned of %u walked, %u pad slot(s) found",
-           scanned, objects, found);
+
+    if (ran_out) {
+        ga_log("scan: paused at 0x%llx of 0x%llx in the module at 0x%llx, "
+               "%u found so far; carrying on next time",
+               (unsigned long long)(cursor ? cursor->offset : 0),
+               (unsigned long long)paused_size,
+               (unsigned long long)(cursor ? cursor->mapbase : 0), found);
+    } else {
+        if (cursor) {
+            cursor->mapbase = 0;
+            cursor->offset = 0;
+            cursor->done = 1;
+        }
+        ga_log("scan: %u object(s) scanned of %u walked, %u pad slot(s) found",
+               scanned, objects, found);
+    }
     return (int)found;
 }
 
@@ -642,9 +686,9 @@ int ga_hook_find_slots(const ga_target_t *t, ga_slot_t *out, unsigned max,
 }
 
 int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max,
-                       ga_orphan_t *orphan)
+                       ga_orphan_t *orphan, ga_scan_cursor_t *cursor)
 {
-    (void)t; (void)out; (void)max; (void)orphan;
+    (void)t; (void)out; (void)max; (void)orphan; (void)cursor;
     return -1;
 }
 

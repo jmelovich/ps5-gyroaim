@@ -52,11 +52,22 @@ extern int ga_hook_verbose;
  * answers nothing. */
 extern volatile int ga_hook_cancel;
 
-/* A module larger than this is not swept for slot values. The sweep exists
- * for modules built without a PLT, which are small; a large one has a
- * relocation table and is found that way instead. Sweeping a hundreds of
- * megabyte executable was what made the service unresponsive. */
-#define GA_SCAN_MAX_BYTES  (48u * 1024u * 1024u)
+/* How long one pass of the value sweep may run before it hands control back.
+ *
+ * A size limit was tried instead and was wrong: it skipped any module above
+ * it, and a 109 MB homebrew executable built without a PLT is exactly the
+ * case the sweep exists for. A module that large cannot be read in one go
+ * without the service going deaf to signals, so the sweep is interrupted on a
+ * clock and resumes from where it stopped. */
+#define GA_SCAN_BUDGET_MS  400u
+
+/* Where a sweep got to, so the next pass carries on rather than starting
+ * again. Owned by the caller and cleared when a sweep finishes. */
+typedef struct {
+    uint64_t mapbase;       /* the object being read, 0 when not started */
+    uint64_t offset;        /* how far into it */
+    int      done;          /* the walk finished, so there is nothing left */
+} ga_scan_cursor_t;
 
 #define GA_MAX_SLOTS 24
 
@@ -120,4 +131,5 @@ void ga_hook_verify_reads(const ga_target_t *target, const intptr_t *addrs,
  *
  * Returns the number of slots found. */
 int ga_hook_scan_slots(const ga_target_t *target, ga_slot_t *out,
-                       unsigned max, ga_orphan_t *orphan);
+                       unsigned max, ga_orphan_t *orphan,
+                       ga_scan_cursor_t *cursor);

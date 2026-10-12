@@ -297,7 +297,7 @@ static void report(const ga_args_t *t)
  * occasionally.
  */
 static int attach_once(pid_t game, const char *title, int deep,
-                       ga_inject_t *inj)
+                       ga_scan_cursor_t *cursor, ga_inject_t *inj)
 {
     ga_target_t target;
     ga_slot_t slots[GA_MAX_SLOTS];
@@ -315,14 +315,18 @@ static int attach_once(pid_t game, const char *title, int deep,
     ga_orphan_t orphan;
 
     n = ga_hook_find_slots(&target, slots, GA_MAX_SLOTS, &orphan);
-    if (n <= 0 && !orphan.args && deep)
-        n = ga_hook_scan_slots(&target, slots, GA_MAX_SLOTS, &orphan);
+
+    /* The sweep is for modules built without a PLT, which have no relocations
+     * to walk. A large one is read across several passes, so once started it
+     * continues on every attempt rather than waiting for the slow cadence. */
+    if (n <= 0 && !orphan.args && (deep || cursor->mapbase))
+        n = ga_hook_scan_slots(&target, slots, GA_MAX_SLOTS, &orphan, cursor);
 
     if (orphan.args)
         return ga_inject_adopt(&target, &orphan, inj) == 0 ? 0 : -1;
 
     if (n <= 0)
-        return 1;               /* imports not bound yet, or none to find */
+        return 1;               /* not bound yet, still reading, or none */
 
     if (ga_inject_install(&target, slots, (unsigned)n, inj) != 0) {
         ga_log("%s: install failed; the game is untouched", title);
@@ -363,10 +367,12 @@ int main(void)
     int64_t next_attach = 0;
     int64_t game_since = 0;
     int64_t next_deep = 0;
+    ga_scan_cursor_t cursor;
     int attach_state = 0;       /* last reported, so it is logged once */
     int64_t ms = 0;
 
     memset(&inj, 0, sizeof(inj));
+    memset(&cursor, 0, sizeof(cursor));
     memset(&settings, 0, sizeof(settings));
     memset(&web, 0, sizeof(web));
     pthread_mutex_init(&web.lock, NULL);
@@ -505,6 +511,7 @@ int main(void)
             game_since = ms;
             next_attach = ms;
             next_deep = ms;
+            memset(&cursor, 0, sizeof(cursor));
         } else if (n == 0 && game != -1) {
             ga_log("game stopped: %s, pid %d", title, (int)game);
             /* The process is gone; there is nothing left to restore, and the
@@ -526,7 +533,7 @@ int main(void)
              * walks another process's memory with primitives that are not safe
              * to use from two instances at once. */
             int deep = ms >= next_deep;
-            int rc = attach_once(game, title, deep, &inj);
+            int rc = attach_once(game, title, deep, &cursor, &inj);
 
             if (deep)
                 next_deep = ms + 15000;
@@ -544,7 +551,10 @@ int main(void)
                 /* Often for the first second or two of a launch, so the retry
                  * is quick at first and then eases off rather than reading a
                  * large executable over and over. */
-                next_attach = ms + (ms - game_since < 60000 ? 1000 : 15000);
+                /* Mid-sweep, come straight back; otherwise ease off. */
+                next_attach = cursor.mapbase
+                    ? ms + 100
+                    : ms + (ms - game_since < 60000 ? 1000 : 15000);
 
                 if (rc != attach_state) {
                     attach_state = rc;

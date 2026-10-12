@@ -15,6 +15,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int failures;
@@ -58,6 +59,27 @@ static void check(const char *what, int ok, double got, double want)
     }
     printf("  FAIL %-44s got %.1f, wanted %.1f\n", what, got, want);
     failures++;
+}
+
+/* A clock shared by the stepped sequences below, so one run carries on from
+ * where the last stopped rather than jumping back. */
+static uint64_t g_when = 1000000;
+
+/* Feeds the stub a steady rotation for a while and returns the last output.
+ * Rate is in degrees a second about the yaw axis. */
+static void spin(ga_args_t *a, float deg_per_s, int ms, uint8_t *out)
+{
+    const int step = 8;                 /* a real pad's interval */
+    uint8_t buf[GA_PAD_SIZE];
+
+    set_float(GA_OFF_ANGVEL + 4, deg_per_s / 57.29578f);
+    for (int elapsed = 0; elapsed < ms; elapsed += step) {
+        sample_timestamp(g_when);
+        g_when += (uint64_t)step * 1000;
+        memset(buf, 0, sizeof(buf));
+        ga_stub_read_state(1, buf, a);
+    }
+    memcpy(out, buf, GA_PAD_SIZE);
 }
 
 /* Runs the stub over a few samples so its smoothing settles, and returns the
@@ -228,6 +250,80 @@ int main(void)
               buf[GA_OFF_LX], 160);
         check("split: tilting went to the right stick", buf[GA_OFF_RY] < 120,
               buf[GA_OFF_RY], 100);
+    }
+
+    printf("a rotation can be held instead of flowing\n");
+
+    /* The complaint this answers: a gyro reports how fast it is turning, so a
+     * held tilt reads as nothing and the control springs back, then reads the
+     * other way on the way home. Reading the rotation as an angle instead
+     * keeps the control pushed for as long as the pad is held over. */
+    ga_config_defaults(&c);
+    c.activation = GA_ACT_ALWAYS;
+    c.tighten = 0.0f;
+    c.smooth_rate = 0.0f;
+    c.carry_cap = 0.0f;
+    c.space = GA_SPACE_LOCAL;
+    c.calibrate = 0;
+    c.merge_stick = 0;
+    memset(c.route, 0, sizeof(c.route));
+    c.route[GA_SRC_YAW][GA_OUT_RIGHT_X] = 1;
+    c.read_mode[GA_SRC_YAW] = GA_READ_HOLD;
+    c.full_angle[GA_SRC_YAW] = 45.0f;
+    c.recentre = 0.0f;
+    ga_config_clamp(&c);
+
+    {
+        uint8_t out[GA_PAD_SIZE];
+        sample_reset();
+        prepare(&a, &c);
+        g_when = 1000000;
+
+        /* Tilt over at 45 deg/s for half a second: about 22 degrees, half of
+         * the 45 that asks for everything. */
+        spin(&a, 45.0f, 500, out);
+        int tilted = out[GA_OFF_RX];
+        check("tilting over pushes the stick", tilted > 150, tilted, 190);
+
+        /* Now stop moving and hold there. This is where the old behaviour
+         * sprang back to centre. */
+        spin(&a, 0.0f, 1000, out);
+        int held = out[GA_OFF_RX];
+        check("holding it there keeps the stick pushed", held > 150, held, 190);
+        check("and at the same amount", abs(held - tilted) < 6, held, tilted);
+
+        /* Return to where it started: the stick comes back to centre. */
+        spin(&a, -45.0f, 500, out);
+        check("coming back to rest centres the stick completely",
+              out[GA_OFF_RX] == 128, out[GA_OFF_RX], 128);
+
+        /* Past the full angle it stops asking for more, so coming back does
+         * not have to unwind an overshoot first. */
+        spin(&a, 90.0f, 1500, out);
+        int pinned = out[GA_OFF_RX];
+        spin(&a, 0.0f, 200, out);
+        check("beyond the full angle it just stays at full",
+              out[GA_OFF_RX] == pinned && pinned > 230, out[GA_OFF_RX], 255);
+        spin(&a, -90.0f, 600, out);
+        check("and lets go as soon as it comes back",
+              out[GA_OFF_RX] < 200, out[GA_OFF_RX], 150);
+    }
+
+    /* The contrast: read as a speed, the same hold springs back. */
+    c.read_mode[GA_SRC_YAW] = GA_READ_FLOW;
+    ga_config_clamp(&c);
+    {
+        uint8_t out[GA_PAD_SIZE];
+        sample_reset();
+        prepare(&a, &c);
+        g_when = 1000000;
+
+        spin(&a, 45.0f, 500, out);
+        check("read as a speed, turning pushes the stick",
+              out[GA_OFF_RX] > 140, out[GA_OFF_RX], 170);
+        spin(&a, 0.0f, 500, out);
+        check("and stopping lets it go, as aiming wants",
+              abs((int)out[GA_OFF_RX] - 128) < 8, out[GA_OFF_RX], 128);
     }
 
     printf("parking it leaves the sample alone\n");

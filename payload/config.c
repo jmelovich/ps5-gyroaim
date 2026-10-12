@@ -37,6 +37,16 @@ void ga_config_defaults(ga_config_t *c)
     c->strength[GA_SRC_PITCH] = 1.2f;
     c->strength[GA_SRC_ROLL] = 1.0f;
 
+    /* Read as a speed by default, which is what aiming wants. Thirty-five
+     * degrees of tilt for full deflection is a comfortable reach when a
+     * rotation is switched to being held instead. */
+    for (int s = 0; s < GA_SRC_COUNT; s++) {
+        c->read_mode[s] = GA_READ_FLOW;
+        c->full_angle[s] = 35.0f;
+    }
+    c->recentre = 0.0f;
+    c->hold_band = 0.04f;
+
     c->accel_mul = 1.0f;             /* no acceleration by default */
     c->sens_lo_rate = 0.0f;
     c->sens_hi_rate = 75.0f;
@@ -93,7 +103,11 @@ void ga_config_clamp(ga_config_t *c)
         c->strength[s] = clampf(c->strength[s], 0.0f, 20.0f);
         for (int d = 0; d < GA_OUT_COUNT; d++)
             c->route[s][d] = clampi(c->route[s][d], -1, 1);
+        c->read_mode[s] = clampi(c->read_mode[s], 0, GA_READ_HOLD);
+        c->full_angle[s] = clampf(c->full_angle[s], 3.0f, 180.0f);
     }
+    c->recentre = clampf(c->recentre, 0.0f, 5.0f);
+    c->hold_band = clampf(c->hold_band, 0.0f, 0.3f);
     c->accel_mul = clampf(c->accel_mul, 0.1f, 8.0f);
     c->sens_lo_rate = clampf(c->sens_lo_rate, 0.0f, 500.0f);
     c->sens_hi_rate = clampf(c->sens_hi_rate, 0.0f, 1000.0f);
@@ -199,9 +213,13 @@ void ga_config_to_args(const ga_config_t *c, ga_args_t *a)
      * cannot negate a float itself. */
     for (int s = 0; s < GA_SRC_COUNT; s++) {
         a->strength[s] = c->strength[s];
+        a->read_mode[s] = (uint32_t)c->read_mode[s];
+        a->full_angle[s] = c->full_angle[s];
         for (int d = 0; d < GA_OUT_COUNT; d++)
             a->route[s][d] = (float)c->route[s][d];
     }
+    a->recentre = c->recentre;
+    a->hold_band = c->hold_band;
     a->accel_mul = c->accel_mul;
     a->sens_lo_rate = c->sens_lo_rate;
     a->sens_hi_rate = c->sens_hi_rate;
@@ -418,6 +436,14 @@ void ga_config_title_path(const char *title, char *out, size_t n)
     F("accel_mul", accel_mul)                            \
     F("sens_lo_rate", sens_lo_rate)                      \
     F("sens_hi_rate", sens_hi_rate)                      \
+    I("read_yaw", read_mode[GA_SRC_YAW])                 \
+    I("read_pitch", read_mode[GA_SRC_PITCH])             \
+    I("read_roll", read_mode[GA_SRC_ROLL])               \
+    F("full_angle_yaw", full_angle[GA_SRC_YAW])          \
+    F("full_angle_pitch", full_angle[GA_SRC_PITCH])      \
+    F("full_angle_roll", full_angle[GA_SRC_ROLL])        \
+    F("recentre", recentre)                              \
+    F("hold_band", hold_band)                            \
     F("strength_yaw", strength[GA_SRC_YAW])              \
     F("strength_pitch", strength[GA_SRC_PITCH])          \
     F("strength_roll", strength[GA_SRC_ROLL])            \

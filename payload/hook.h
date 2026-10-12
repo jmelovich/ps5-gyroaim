@@ -25,7 +25,7 @@ extern const char *const ga_fn_names[GA_FN_COUNT];
  * rather than with the page's layout because the slot scan needs it to tell
  * one of our own gateways from an ordinary pointer. */
 #define GA_MAGIC          0x4f524947u   /* "GYRO" */
-#define GA_LAYOUT_VERSION 5u
+#define GA_LAYOUT_VERSION 6u
 
 typedef struct {
     pid_t    pid;

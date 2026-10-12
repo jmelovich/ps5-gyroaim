@@ -83,7 +83,9 @@ button.flat{background:var(--bg);color:var(--fg);border:1px solid var(--line)}
 align-items:center;margin:2px 0 4px}
 .grid .hd{font-size:10.5px;color:var(--mut);text-align:center;line-height:1.15;
 text-transform:uppercase;letter-spacing:.03em;padding-bottom:2px}
-.grid .rw{font-size:13.5px;padding-right:6px;white-space:nowrap}
+.grid .rw{font-size:13.5px;padding-right:6px;white-space:nowrap;
+display:flex;flex-direction:column;gap:3px;align-items:flex-start}
+.grid .mode{font-size:11px;padding:2px 4px;border-radius:6px;max-width:7.5em}
 .rcell{appearance:none;border:1px solid var(--line);background:var(--bg);
 color:var(--mut);border-radius:8px;padding:0;height:44px;font:inherit;
 font-size:19px;font-weight:600;line-height:1;text-align:center;cursor:pointer}
@@ -124,6 +126,13 @@ the other direction. A row can drive more than one control, so one rotation can
 move both sticks, and a column can be fed by more than one rotation.</p>
 </div></details></section>
 <div id='form'></div>
+<section id='holdbits' hidden><details open><summary>Rest position</summary>
+<div class='body'>
+<div class='row'><span class='lbl'>Where rest is
+<span class='hint'>Hold the controller the way you mean to rest, then set it.
+Everything a held rotation does is measured from there.</span></span>
+<button id='setRest'>Set rest here</button></div>
+</div></details></section>
 <section><details><summary>Profile</summary><div class='body'>
 <div class='btns'>
 <button id='saveTitle'>Keep these for this game</button>
@@ -137,8 +146,11 @@ var SPEC=[
 ['Strength',1,[
 ['enabled','On','bool','Master switch for the whole transform.'],
 ['strength_yaw','Turning','num',0,8,0.05,'Degrees of view per degree of hand movement. 1.0 is one to one.'],
+['full_angle_yaw','Turning, full at','num',3,180,1,'Degrees away from rest that push the control all the way.'],
 ['strength_pitch','Tilting','num',0,8,0.05],
+['full_angle_pitch','Tilting, full at','num',3,180,1],
 ['strength_roll','Leaning','num',0,8,0.05],
+['full_angle_roll','Leaning, full at','num',3,180,1],
 ['accel_mul','Acceleration','num',0.5,4,0.05,'Multiplier once the hands are moving fast. 1.0 is none.'],
 ['sens_lo_rate','Ramp starts at','num',0,200,1,'deg/s'],
 ['sens_hi_rate','Fully applied at','num',0,400,1,'deg/s']]],
@@ -165,6 +177,9 @@ var SPEC=[
 ['axis_roll','Roll from','sel',[[0,'Gyro X'],[1,'Gyro Y'],[2,'Gyro Z']]]]],
 ['Drift',0,[
 ['calibrate','Learn the resting offset','bool','Watches the pad while it is still and subtracts what it reads then.']]],
+['Holding',0,[
+['recentre','Creep back to rest','num',0,5,0.05,'Fraction of a held angle given up each second. Zero holds for as long as you hold the pad, which is what steering wants.'],
+['hold_band','Treat as rest within','num',0,0.3,0.01,'Fraction of the full angle that counts as being at rest. Without a little of this the control never quite lets go.']],'sec_holding'],
 ['Rumble',0,[
 ['rumble','Rumble while turning','bool','Switches the pad to legacy motor emulation, which can change how the game’s own haptics feel.'],
 ['rumble_scale','Strength','num',0,1.5,0.05],
@@ -173,8 +188,10 @@ var SPEC=[
 var SRC=[['yaw','Turning'],['pitch','Tilting'],['roll','Leaning']];
 var DST=[['rx','Right<br>stick &#8646;'],['ry','Right<br>stick &#8645;'],
 ['lx','Left<br>stick &#8646;'],['ly','Left<br>stick &#8645;']];
-var ROUTE=[];
-SRC.forEach(function(s){DST.forEach(function(d){ROUTE.push('route_'+s[0]+'_'+d[0])})});
+var ROUTE=[],MODES=[];
+SRC.forEach(function(s){
+MODES.push('read_'+s[0]);
+DST.forEach(function(d){ROUTE.push('route_'+s[0]+'_'+d[0])})});
 var K=[],META={},busy=0,pending=0,cfg=null,live=null,trail=[];
 function el(i){return document.getElementById(i)}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')}
@@ -182,10 +199,14 @@ function buildRouting(){
 var h="<div class='hd'></div>";
 DST.forEach(function(d){h+="<div class='hd'>"+d[1]+'</div>'});
 SRC.forEach(function(s){
-h+="<div class='rw'>"+s[1]+'</div>';
+h+="<div class='rw'>"+s[1]+
+"<select class='mode' id='read_"+s[0]+"'>"+
+"<option value='0'>flows</option><option value='1'>holds</option></select></div>";
 DST.forEach(function(d){
 h+="<button class='rcell' id='route_"+s[0]+'_'+d[0]+"'>&middot;</button>"})});
 el('routing').innerHTML=h;
+MODES.forEach(function(k){
+el(k).addEventListener('change',put)});
 ROUTE.forEach(function(k){
 el(k).addEventListener('click',function(){
 /* blank, then on, then inverted, so the common case is one tap. */
@@ -202,12 +223,12 @@ e.className='rcell'+(v>0?' on':(v<0?' inv':''));
 function build(){
 var h='';
 SPEC.forEach(function(g,gi){
-h+="<section><details"+(g[1]?' open':'')+"><summary>"+esc(g[0])+
-"</summary><div class='body'>";
+h+="<section"+(g[3]?" id='"+g[3]+"'":"")+"><details"+(g[1]?' open':'')+
+"><summary>"+esc(g[0])+"</summary><div class='body'>";
 g[2].forEach(function(f){
 var k=f[0],lab=f[1],kind=f[2];K.push(k);META[k]={kind:kind};
 var hint=null;
-h+="<div class='row'><span class='lbl'>"+esc(lab);
+h+="<div class='row' id='row_"+k+"'><span class='lbl'>"+esc(lab);
 if(kind==='bool'){hint=f[3]}
 else if(kind==='num'){hint=f[6];META[k].step=f[5];META[k].min=f[3];META[k].max=f[4]}
 if(hint)h+="<span class='hint'>"+esc(hint)+"</span>";
@@ -245,7 +266,8 @@ var q=K.map(function(k){
 var e=el(k);
 return k+'='+(e.type==='checkbox'?(e.checked?1:0):e.value)})
 .concat(ROUTE.map(function(k){
-return k+'='+(parseInt(el(k).dataset.v||'0',10))})).join('&');
+return k+'='+(parseInt(el(k).dataset.v||'0',10))}))
+.concat(MODES.map(function(k){return k+'='+el(k).value})).join('&');
 fetch('/api/set?'+q).then(function(r){return r.json()}).then(function(j){
 apply(j.config)}).catch(function(){}).then(function(){
 busy=0;if(pending){pending=0;put()}})}
@@ -253,6 +275,22 @@ function apply(c){
 cfg=c;
 ROUTE.forEach(function(k){
 if(el(k)&&c[k]!==undefined)setCell(k,c[k])});
+MODES.forEach(function(k){
+var e=el(k);
+if(e&&c[k]!==undefined&&document.activeElement!==e)e.value=c[k]});
+/* Only the number that applies to each rotation is shown, so switching how a
+   rotation is read swaps its control rather than adding one. */
+var holding=false;
+SRC.forEach(function(s){
+var hold=c['read_'+s[0]]===1;
+if(hold)holding=true;
+var a=el('row_strength_'+s[0]),b=el('row_full_angle_'+s[0]);
+if(a)a.hidden=hold;
+if(b)b.hidden=!hold});
+var hs=el('holdbits');
+if(hs)hs.hidden=!holding;
+var hg=el('sec_holding');
+if(hg)hg.hidden=!holding;
 K.forEach(function(k){
 var e=el(k),n=el('n_'+k);
 if(document.activeElement===e||document.activeElement===n)return;
@@ -386,6 +424,8 @@ el('dot').className='bad';
 el('statusText').textContent='no connection to the service'})}
 buildRouting();
 build();
+el('setRest').addEventListener('click',function(){
+fetch('/api/rest').then(tick)});
 el('saveTitle').addEventListener('click',function(){
 fetch('/api/save?scope=title').then(tick)});
 el('reload').addEventListener('click',function(){

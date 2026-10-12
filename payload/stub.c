@@ -475,6 +475,33 @@ static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
     if (fresh)
         steady(a, rate);
 
+    /* A held angle is kept whether or not the transform is applying anything,
+     * so tilting while disengaged and then engaging gives the right answer
+     * rather than starting from wherever the pad happened to be. */
+    if (a->rest_seen != a->rest_epoch) {
+        a->rest_seen = a->rest_epoch;
+        for (int i = 0; i < GA_SRC_COUNT; i++)
+            a->angle[i] = a->k.zero;
+    }
+    if (fresh && dt > a->k.zero) {
+        for (int i = 0; i < GA_SRC_COUNT; i++) {
+            float next = a->angle[i] + rate[i] * dt;
+            if (a->recentre > a->k.zero) {
+                float shed = a->recentre * dt;
+                if (shed > a->k.one)
+                    shed = a->k.one;
+                next = next - next * shed;
+            }
+            /* Clamped at the full-deflection angle so it cannot wind up past
+             * what it can ask for and then unwind on the way back. */
+            float limit = a->full_angle[i] > a->k.eps ? a->full_angle[i]
+                                                      : a->k.one;
+            a->angle[i] = fclamp(a, next, a->k.zero - limit, limit);
+        }
+    }
+    for (int i = 0; i < GA_SRC_COUNT; i++)
+        a->held[i] = a->angle[i];
+
     float accel = accel_factor(a, rate);
     float busiest = a->k.zero;
 
@@ -488,7 +515,33 @@ static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
 
             if (gx != a->k.zero || gy != a->k.zero)
                 routed = 1;
-            float scaled = rate[i] * a->strength[i] * accel;
+
+            /* Both modes end up as a speed, so everything downstream, the
+             * merge with the stick and the game's own curve, is shared. In
+             * HOLD the speed is whatever asks for the deflection the angle
+             * calls for; acceleration has no meaning there and is left out. */
+            float scaled;
+            if (a->read_mode[i] == GA_READ_HOLD) {
+                float limit = a->full_angle[i] > a->k.eps ? a->full_angle[i]
+                                                          : a->k.one;
+                float f = fclamp(a, a->angle[i] / limit,
+                                 a->k.zero - a->k.one, a->k.one);
+                float size = f < a->k.zero ? a->k.zero - f : f;
+
+                /* Near rest, nothing at all. Past the band the remainder is
+                 * stretched back out, so letting go is smooth rather than a
+                 * step. */
+                if (size <= a->hold_band) {
+                    f = a->k.zero;
+                } else if (a->hold_band > a->k.zero) {
+                    float span = a->k.one - a->hold_band;
+                    float over = (size - a->hold_band) / span;
+                    f = f < a->k.zero ? a->k.zero - over : over;
+                }
+                scaled = f * a->max_turn;
+            } else {
+                scaled = rate[i] * a->strength[i] * accel;
+            }
             vx = vx + gx * scaled;
             vy = vy + gy * scaled;
         }

@@ -35,8 +35,20 @@ typedef struct {
     int   route[GA_SRC_COUNT][GA_OUT_COUNT];
 
     /* How much, per rotation, in camera degrees per degree of hand movement,
-     * so 1.0 moves the view as far as the hands move. */
+     * so 1.0 moves the view as far as the hands move. Used when the rotation
+     * is read as a speed. */
     float strength[GA_SRC_COUNT];
+
+    /* How each rotation is read, and when read as a held angle, how far from
+     * rest pushes the control all the way. */
+    int   read_mode[GA_SRC_COUNT];      /* GA_READ_* */
+    float full_angle[GA_SRC_COUNT];     /* degrees */
+
+    /* Fraction of a held angle shed per second. 0 holds indefinitely. */
+    float recentre;
+
+    /* How close to rest counts as at rest, as a fraction of the full angle. */
+    float hold_band;
 
     /* Acceleration: multiply by 1 below lo_rate, rising to accel_mul at
      * hi_rate. A multiplier of 1 means none. */

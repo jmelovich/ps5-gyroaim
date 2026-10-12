@@ -108,6 +108,7 @@ static int state_json(ga_web_state_t *st, char *out, size_t n)
                   "\"out_frac\":%.4f,"
                   "\"in\":[%u,%u,%u,%u],\"out\":[%u,%u,%u,%u],"
                   "\"l2\":%u,\"r2\":%u,\"buttons\":%u,"
+                  "\"held\":[%.1f,%.1f,%.1f],"
                   "\"cal_count\":%u,\"cal_active\":%u,\"rumble_level\":%u,"
                   "\"calls\":%llu,\"applied\":%llu}}",
                   l->active, l->saturated,
@@ -119,6 +120,8 @@ static int state_json(ga_web_state_t *st, char *out, size_t n)
                   l->in_rx, l->in_ry, l->in_lx, l->in_ly,
                   l->out_rx, l->out_ry, l->out_lx, l->out_ly,
                   l->last_l2, l->last_r2, l->last_buttons,
+                  (double)l->held[GA_SRC_YAW], (double)l->held[GA_SRC_PITCH],
+                  (double)l->held[GA_SRC_ROLL],
                   l->cal_count, l->cal_was_active, l->rumble_last_level,
                   (unsigned long long)l->calls,
                   (unsigned long long)l->applied);
@@ -168,7 +171,8 @@ static void serve(int fd, ga_web_state_t *st)
 
     if (!strcmp(path, "/api/state") || !strcmp(path, "/api/set") ||
         !strcmp(path, "/api/save") || !strcmp(path, "/api/reload") ||
-        !strcmp(path, "/api/quit") || !strcmp(path, "/api/uninstall")) {
+        !strcmp(path, "/api/quit") || !strcmp(path, "/api/uninstall") ||
+        !strcmp(path, "/api/rest")) {
         char *body = malloc(RESP_MAX);
         if (!body) {
             reply(fd, 404, "text/plain", "", 0);
@@ -181,6 +185,8 @@ static void serve(int fd, ga_web_state_t *st)
             st->save_as_title = 1;
         else if (!strcmp(path, "/api/reload"))
             st->reload_request = 1;
+        else if (!strcmp(path, "/api/rest"))
+            st->rest_request = 1;
         else if (!strcmp(path, "/api/quit"))
             st->quit_request = 1;
         else if (!strcmp(path, "/api/uninstall")) {

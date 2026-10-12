@@ -35,6 +35,24 @@ enum {
 #define GA_STICK_COUNT 2
 #define GA_OUT_OF(stick, axis) ((stick) * 2 + (axis))
 
+/* How a rotation is read.
+ *
+ * A gyroscope measures how fast it is turning, not how far it has turned, so
+ * on its own it can only say "moving left now". Held still at an angle it
+ * reads zero and the control returns to centre, and turning back to rest
+ * reads the opposite way. That is right for aiming, where the hands ratchet
+ * and the view should stay put between movements, and wrong for steering,
+ * where a held tilt should mean a held input.
+ *
+ * So each rotation is read one of two ways. FLOW is the rate itself. HOLD
+ * integrates it into an angle away from a remembered resting position, and
+ * the control stays pushed for as long as the pad is held there.
+ */
+enum {
+    GA_READ_FLOW = 0,   /* speed of turning, for aiming */
+    GA_READ_HOLD,       /* angle away from rest, for steering */
+};
+
 /* What the gyro offers. Rotations rather than raw sensor axes, because a
  * person thinks in turning, tilting and leaning, and because the gravity-
  * referenced spaces are defined in those terms. */
@@ -123,6 +141,26 @@ typedef struct {
     volatile float route[GA_SRC_COUNT][GA_OUT_COUNT];
     volatile float strength[GA_SRC_COUNT];
 
+    /* Per rotation: how it is read, and for a held angle, how far from rest
+     * counts as pushing the control all the way. */
+    volatile uint32_t read_mode[GA_SRC_COUNT];   /* GA_READ_* */
+    volatile float full_angle[GA_SRC_COUNT];     /* degrees */
+
+    /* How quickly a held angle creeps back to rest on its own, as a fraction
+     * shed per second. Zero holds for as long as the pad is held, which is
+     * what steering wants; a little lets integration drift forgive itself. */
+    volatile float recentre;
+
+    /* How close to rest counts as being at rest, as a fraction of the full
+     * angle. Without it the control never quite lets go: a tenth of a degree
+     * left over still asks for something, and the game's deadzone is then
+     * undone on its behalf, so a fraction of a degree becomes a sixth of the
+     * stick and the game keeps drifting. */
+    volatile float hold_band;
+
+    /* Bumped to make wherever the pad is now the new resting position. */
+    volatile uint32_t rest_epoch;
+
     /* Acceleration: everything is multiplied by 1 below lo_rate, rising to
      * accel_mul at hi_rate. A multiplier of 1 means none. */
     volatile float accel_mul;
@@ -182,6 +220,8 @@ typedef struct {
     volatile float    ring[GA_RING_N][GA_SRC_COUNT];
     volatile uint32_t ring_i;
     volatile float    carry[GA_STICK_COUNT][2];
+    volatile float    angle[GA_SRC_COUNT];   /* degrees away from rest */
+    volatile uint32_t rest_seen;             /* the epoch these angles start from */
     volatile uint64_t last_ts;
     volatile uint32_t rumble_last_level;
     volatile uint64_t rumble_last_ts;
@@ -197,6 +237,7 @@ typedef struct {
     volatile float    last_angvel[3];
     volatile float    last_accel[3];
     volatile float    rate[GA_SRC_COUNT];   /* deg/s, after bias and space */
+    volatile float    held[GA_SRC_COUNT];   /* degrees away from rest */
     volatile float    want[GA_STICK_COUNT][2];  /* deg/s asked of each stick */
     volatile float    out_frac;              /* the busier stick, 0..1 */
     volatile uint8_t  in_rx, in_ry, out_rx, out_ry;    /* right stick */

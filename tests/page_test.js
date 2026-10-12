@@ -52,10 +52,14 @@ console.log(`  row labels:   ${rows} (expect 3)`);
 // Every cell id the script will later try to address must exist.
 const ids = [...grid.matchAll(/id='(route_[a-z_]+)'/g)].map(m => m[1]);
 console.log(`  ids: ${ids.join(' ')}`);
+const modes = (grid.match(/<select class='mode' id='read_/g) || []).length;
+console.log(`  mode selects: ${modes} (expect 3)`);
+
 const want = ['yaw', 'pitch', 'roll']
   .flatMap(s => ['rx', 'ry', 'lx', 'ly'].map(d => `route_${s}_${d}`));
 const missing = want.filter(id => !ids.includes(id));
-const ok = cells === 12 && heads === 5 && rows === 3 && missing.length === 0;
+const ok = cells === 12 && heads === 5 && rows === 3 && modes === 3 &&
+           missing.length === 0;
 if (missing.length) console.log(`  MISSING: ${missing.join(' ')}`);
 console.log(ok ? '\nall page checks passed' : '\npage checks FAILED');
 process.exit(ok ? 0 : 1);

@@ -457,6 +457,11 @@ int main(void)
             web.cfg_dirty = 1;
             ga_log("settings will now be kept in %s", active_path);
         }
+        if (web.rest_request) {
+            web.rest_request = 0;
+            settings.rest_epoch++;
+            ga_log("rest position set where the pad is now");
+        }
         if (web.reload_request) {
             web.reload_request = 0;
             if (ga_config_load(&web.cfg, active_path) == 0) {

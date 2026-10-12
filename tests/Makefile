@@ -22,6 +22,12 @@ check: all
 	./curve_test
 	./transform_test
 	./qr_test
+	@# The portal's script is checked against a stub DOM where node exists.
+	@if command -v node >/dev/null; then \
+	    node page_test.js; \
+	else \
+	    echo "node not found, skipping the page check"; \
+	fi
 
 clean:
 	rm -f $(BIN) qr-sample.pgm qr-sample.png

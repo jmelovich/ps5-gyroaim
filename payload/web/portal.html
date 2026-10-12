@@ -84,11 +84,11 @@ align-items:center;margin:2px 0 4px}
 .grid .hd{font-size:10.5px;color:var(--mut);text-align:center;line-height:1.15;
 text-transform:uppercase;letter-spacing:.03em;padding-bottom:2px}
 .grid .rw{font-size:13.5px;padding-right:6px;white-space:nowrap}
-.cell{appearance:none;border:1px solid var(--line);background:var(--bg);
-color:var(--mut);border-radius:8px;padding:0;height:42px;font:inherit;
-font-size:19px;font-weight:600;line-height:1;text-align:center}
-.cell.on{border-color:var(--acc);color:#fff;background:var(--acc)}
-.cell.inv{border-color:var(--warn);color:#fff;background:var(--warn)}
+.rcell{appearance:none;border:1px solid var(--line);background:var(--bg);
+color:var(--mut);border-radius:8px;padding:0;height:44px;font:inherit;
+font-size:19px;font-weight:600;line-height:1;text-align:center;cursor:pointer}
+.rcell.on{border-color:var(--acc);color:#fff;background:var(--acc)}
+.rcell.inv{border-color:var(--warn);color:#fff;background:var(--warn)}
 .on{color:var(--ok);font-weight:600}
 .warn{color:var(--warn);font-weight:600}
 .off{color:var(--mut)}
@@ -184,7 +184,7 @@ DST.forEach(function(d){h+="<div class='hd'>"+d[1]+'</div>'});
 SRC.forEach(function(s){
 h+="<div class='rw'>"+s[1]+'</div>';
 DST.forEach(function(d){
-h+="<button class='cell' id='route_"+s[0]+'_'+d[0]+"'>&middot;</button>"})});
+h+="<button class='rcell' id='route_"+s[0]+'_'+d[0]+"'>&middot;</button>"})});
 el('routing').innerHTML=h;
 ROUTE.forEach(function(k){
 el(k).addEventListener('click',function(){
@@ -197,7 +197,7 @@ function setCell(k,v){
 var e=el(k);
 e.dataset.v=v;
 e.textContent=v>0?'+':(v<0?'\u2212':'\u00b7');
-e.className='cell'+(v>0?' on':(v<0?' inv':''));
+e.className='rcell'+(v>0?' on':(v<0?' inv':''));
 }
 function build(){
 var h='';
@@ -384,6 +384,7 @@ drawCurve();drawSens();
 }).catch(function(){
 el('dot').className='bad';
 el('statusText').textContent='no connection to the service'})}
+buildRouting();
 build();
 el('saveTitle').addEventListener('click',function(){
 fetch('/api/save?scope=title').then(tick)});

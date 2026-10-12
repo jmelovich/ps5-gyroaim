@@ -135,6 +135,7 @@ bool query(Status &out)
     out.kstuff = json_bool(body, "kstuff");
     out.attached = json_bool(body, "attached");
     json_string(body, "version", out.version, sizeof(out.version));
+    json_string(body, "build", out.build, sizeof(out.build));
     json_string(body, "title", out.game, sizeof(out.game));
     json_string(body, "status", out.text, sizeof(out.text));
     return true;
@@ -152,7 +153,10 @@ int match_bundled_version(char *what, std::size_t what_len)
     int changed = 0;
 
     bool running = query(state);
-    bool stale = running && std::strcmp(state.version, GA_VERSION) != 0;
+    /* Compared on both, because two builds of one version are still two
+     * different binaries and the version alone let an older one survive. */
+    bool stale = running && (std::strcmp(state.version, GA_VERSION) != 0 ||
+                             std::strcmp(state.build, GA_BUILD) != 0);
 
     /* The boot copy is refreshed whenever one exists, because its version
      * cannot be read without running it. Overwriting a few hundred kilobytes
@@ -177,10 +181,12 @@ int match_bundled_version(char *what, std::size_t what_len)
         for (int i = 0; i < 20; i++) {
             usleep(500000);
             Status after{};
-            if (query(after) && std::strcmp(after.version, GA_VERSION) == 0) {
+            if (query(after) && std::strcmp(after.version, GA_VERSION) == 0 &&
+                std::strcmp(after.build, GA_BUILD) == 0) {
                 std::snprintf(what, what_len,
-                              "updated the service from %s to %s",
-                              state.version, GA_VERSION);
+                              "updated the service from %s (%s) to %s (%s)",
+                              state.version, state.build[0] ? state.build : "?",
+                              GA_VERSION, GA_BUILD);
                 return 1;
             }
         }

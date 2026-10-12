@@ -12,7 +12,11 @@ $(error no SDK at $(PS5_PAYLOAD_SDK); run tools/setup-deps.sh)
 endif
 include $(PS5_PAYLOAD_SDK)/toolchain/prospero.mk
 
-PS5_HOST ?= 192.168.0.192
+# Identifies the exact source this was built from, so the control panel can
+# tell two builds of the same version apart.
+GA_BUILD := $(shell git -C $(ROOT) describe --always --dirty --tags 2>/dev/null || echo unknown)
+
+PS5_HOST ?= 192.168.0.245
 PS5_PORT ?= 9021
 
 ELF := gyroaim.elf
@@ -35,7 +39,7 @@ GA_SELFTEST ?= 0
 # disagreed about where the fields were. That is a miserable bug to find.
 CFLAGS  := -Wall -Wextra -Werror -O2 -g -std=gnu11 -fPIC \
            -fno-stack-protector -fno-math-errno -MMD -MP \
-           -D__PROSPERO__ -DGYROAIM_PORT=$(GYROAIM_PORT) -DGA_SELFTEST=$(GA_SELFTEST)
+           -D__PROSPERO__ -DGYROAIM_PORT=$(GYROAIM_PORT) -DGA_SELFTEST=$(GA_SELFTEST) -DGA_BUILD=\"$(GA_BUILD)\"
 
 # The SDK wrapper already supplies crt1.o, -lc, -lkernel_web and the Sce
 # dependencies; kernel_*/klog_* live in crt1.o.

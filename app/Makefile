@@ -8,7 +8,11 @@ ROOT  := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))..)
 BP    := $(ROOT)/.deps/ps5-native-app-boilerplate
 TITLE := PPSA99510
 
-PS5_HOST ?= 192.168.0.192
+# Identifies the exact source this was built from, so the control panel can
+# tell two builds of the same version apart.
+GA_BUILD := $(shell git -C $(ROOT) describe --always --dirty --tags 2>/dev/null || echo unknown)
+
+PS5_HOST ?= 192.168.0.245
 
 # The boilerplate looks for clang-18 by name; PS5_CLANG overrides that. Host
 # clang 22 is what steamlink-ps5 builds its title with.
@@ -39,7 +43,12 @@ service:
 	@# The panel compares the running service against the one it carries, so it
 	@# needs that version at compile time. Copied rather than included across
 	@# the tree, because the app is built from inside the boilerplate's checkout.
-	@cp $(ROOT)/payload/version.h $(ROOT)/app/src/version_service.h
+	@# The build id goes in through this header rather than a -D, because the
+	@# boilerplate refuses a definition containing quotes.
+	@{ cat $(ROOT)/payload/version.h; \
+	   echo '#undef GA_BUILD'; \
+	   echo '#define GA_BUILD "$(GA_BUILD)"'; } \
+	   > $(ROOT)/app/src/version_service.h
 
 dist: service
 	@test -d $(BP) || { echo "run tools/setup-app-deps.sh first" >&2; exit 2; }

@@ -31,6 +31,7 @@ struct Status {
     bool  kstuff;           /* the transform can be installed at all */
     bool  attached;         /* it is hooked into a running game */
     char  version[16];
+    char  build[48];        /* which source it was built from */
     char  game[16];
     char  text[96];         /* the service's own one-line summary */
 };

@@ -90,9 +90,10 @@ static int state_json(ga_web_state_t *st, char *out, size_t n)
     ga_config_json(&st->cfg, cfg, sizeof(cfg));
 
     w = snprintf(out, n, "{\"config\":%s,\"status\":\"%s\",\"title\":\"%s\","
-                 "\"path\":\"%s\",\"version\":\"%s\",\"kstuff\":%d,"
+                 "\"path\":\"%s\",\"version\":\"%s\",\"build\":\"%s\","
+                 "\"kstuff\":%d,"
                  "\"attached\":%d,\"live\":",
-                 cfg, st->status, st->title, st->path, GA_VERSION,
+                 cfg, st->status, st->title, st->path, GA_VERSION, GA_BUILD,
                  st->kstuff ? 1 : 0, st->attached ? 1 : 0);
     if (!st->have_live || !st->attached) {
         w += snprintf(out + w, n - (size_t)w, "null}");

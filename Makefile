@@ -7,7 +7,7 @@
 #
 # PS5_HOST sets the console's address.
 
-PS5_HOST ?= 192.168.0.192
+PS5_HOST ?= 192.168.0.245
 TITLE    := PPSA99510
 
 .PHONY: all service app release test deploy clean setup

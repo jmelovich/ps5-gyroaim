@@ -654,6 +654,9 @@ int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max,
                 }
             }
         }
+
+        if (ran_out)
+            break;      /* leave the cursor pointing at this object */
     }
 
     free(chunk);

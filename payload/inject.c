@@ -31,7 +31,11 @@
 
 #define TARGET_PAGE   0x4000u
 #define GATEWAY_SIZE  16u
-#define STUB_MAX      0x4000u
+/* Sanity bound on the block copied into the game. The mapping made for it is
+ * rounded up to whole pages regardless, so this only has to be comfortably
+ * larger than the real thing. The build checks the section against it, which
+ * is where a block that has outgrown it should be caught. */
+#define STUB_MAX      0x8000u
 #define WRITE_CHUNK   0x800u
 
 #define ALIGN_UP(v, a) (((v) + (a) - 1) & ~((a) - 1))

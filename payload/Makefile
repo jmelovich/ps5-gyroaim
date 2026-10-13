@@ -94,7 +94,18 @@ check-stub: build/stub.o
 	    echo "stub block has external references:"; echo "$$relocs"; \
 	    exit 1; \
 	fi; \
-	echo "stub block is self-contained"
+	size=$$($$tool --section-headers $< \
+	    | awk '$$2 == ".text.gastub" { print strtonum("0x" $$3) }'); \
+	if [ -z "$$size" ]; then echo "cannot size .text.gastub" >&2; exit 1; fi; \
+	max=$$(sed -n 's/^#define STUB_MAX  *0x\([0-9a-fA-F]*\)u.*/\1/p' inject.c); \
+	max=$$((0x$$max)); \
+	if [ "$$size" -gt "$$max" ]; then \
+	    echo "stub block is $$size bytes, over the $$max the injector will"; \
+	    echo "copy. Raise STUB_MAX in inject.c, or the service will refuse"; \
+	    echo "to attach to anything at runtime."; \
+	    exit 1; \
+	fi; \
+	echo "stub block is self-contained, $$size of $$max bytes"
 
 clean:
 	rm -rf build $(ELF) web_page.h

@@ -135,19 +135,6 @@ the other direction. A row can drive more than one control, so one rotation can
 move both sticks, and a column can be fed by more than one rotation.</p>
 </div></details></section>
 <div id='form'></div>
-<section id='btnbits' hidden><details open><summary>Which button</summary>
-<div class='body'>
-<div class='row'><span class='lbl'>Buttons that switch it on
-<span class='hint'>Any one of these turns it on while it is held, and each
-keeps its normal job in the game. A green outline means the controller is
-reporting that button as held right now.</span></span></div>
-<div id='btngrid' class='bgrid'></div>
-<div class='row'><span class='lbl'>Or take it from the controller
-<span class='hint'>Hold the buttons you want on the pad, then press this.
-Needs the transform to be live in a game, since that is where the buttons are
-read.</span></span>
-<button id='learnBtn'>Use what is held</button></div>
-</div></details></section>
 <section id='holdbits' hidden><details open><summary>Rest position</summary>
 <div class='body'>
 <div class='row'><span class='lbl'>Where rest is
@@ -189,6 +176,7 @@ var SPEC=[
 ['game_power','Response curve','num',0.5,4,0.05,'1.0 is linear. Higher bends the curve toward fine control near the centre.']]],
 ['When it applies',0,[
 ['activation','Condition','sel',[[0,'Always'],[2,'Trigger held'],[1,'Button held'],[3,'Never']]],
+['activation_mask','Buttons','btns','Any one of these turns it on while it is held, and each keeps its normal job in the game. A green outline means the controller is reporting that button as held right now.'],
 ['trigger_right','Trigger','sel',[[0,'L2'],[1,'R2']]],
 ['trigger_threshold','Trigger threshold','num',1,255,1,'Out of 255. The button keeps its normal job in the game.']]],
 ['Steadiness',0,[
@@ -282,7 +270,20 @@ SPEC.forEach(function(g,gi){
 h+="<section"+(g[3]?" id='"+g[3]+"'":"")+"><details"+(g[1]?' open':'')+
 "><summary>"+esc(g[0])+"</summary><div class='body'>";
 g[2].forEach(function(f){
-var k=f[0],lab=f[1],kind=f[2];K.push(k);META[k]={kind:kind};
+var k=f[0],lab=f[1],kind=f[2];META[k]={kind:kind};
+/* The button chips are a block, not a single control, so they are built
+   separately and never go in the list of plain inputs. */
+if(kind==='btns'){
+h+="<div id='row_"+k+"'><div class='row'><span class='lbl'>"+esc(lab)+
+"<span class='hint'>"+esc(f[3])+"</span></span></div>"+
+"<div class='bgrid' id='btngrid'></div>"+
+"<div class='row'><span class='lbl'>Or take it from the controller"+
+"<span class='hint'>Hold the buttons you want on the pad, then press this. "+
+"Needs the transform to be live in a game, since that is where the buttons "+
+"are read.</span></span><button id='learnBtn'>Use what is held</button></div>"+
+'</div>';
+return}
+K.push(k);
 var hint=null;
 h+="<div class='row' id='row_"+k+"'><span class='lbl'>"+esc(lab);
 if(kind==='bool'){hint=f[3]}
@@ -353,8 +354,8 @@ var cond=c.activation;
 var tr=el('row_trigger_right'),th=el('row_trigger_threshold');
 if(tr)tr.hidden=cond!==2;
 if(th)th.hidden=cond!==2;
-var bb=el('btnbits');
-if(bb)bb.hidden=cond!==1;
+var bm=el('row_activation_mask');
+if(bm)bm.hidden=cond!==1;
 if(c.activation_mask!==undefined&&c.activation_mask!==mask){
 mask=c.activation_mask;paintButtons()}
 
@@ -521,8 +522,8 @@ drawCurve();drawSens();
 el('dot').className='bad';
 el('statusText').textContent='no connection to the service'})}
 buildRouting();
-buildButtons();
 build();
+buildButtons();
 el('learnBtn').addEventListener('click',function(){
 var held=live&&live.buttons;
 /* Only bits this page offers: the pad also reports bits with no business

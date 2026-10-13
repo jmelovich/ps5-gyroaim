@@ -89,6 +89,26 @@ check('the routing grid is built', cells === 12 && heads === 5 &&
 const chips = (nodes['btngrid'].innerHTML.match(/class='bchip' id='btn_/g) || []).length;
 check('a chip is offered for every button', chips === 16, chips);
 
+// Where it sits matters as much as whether it exists. Built as a section of
+// its own it landed well below the condition that calls for it, so choosing a
+// button meant scrolling off to find a part of the page you had to know was
+// there. It belongs in the same group, in the slot the choice of trigger
+// occupies, so switching the condition swaps one control for the other.
+const form = nodes['form'].innerHTML;
+const at = (id) => form.indexOf(`id='row_${id}'`);
+const pos = { activation: at('activation'), mask: at('activation_mask'),
+              trig: at('trigger_right'), thr: at('trigger_threshold') };
+check('the buttons are built into the form, not a section apart',
+      pos.mask > 0, pos.mask > 0 ? 'in the form' : 'not in the form');
+check('the buttons sit with the condition that calls for them',
+      pos.activation > 0 && pos.mask > pos.activation && pos.mask < pos.trig,
+      `condition ${pos.activation}, buttons ${pos.mask}, trigger ${pos.trig}`);
+// Nothing may come between them, or it is a different group.
+const between = form.slice(pos.activation, pos.mask);
+check('nothing is wedged between the condition and the buttons',
+      (between.match(/id='row_/g) || []).length === 1,
+      (between.match(/id='row_/g) || []).length - 1 + ' in between');
+
 async function conditions() {
   state.config = { activation: 2, trigger_right: 0, trigger_threshold: 64,
                    activation_mask: 0x100 };
@@ -97,13 +117,15 @@ async function conditions() {
         nodes['row_trigger_right'].hidden === false,
         String(nodes['row_trigger_right'].hidden));
   check('under a trigger, the buttons are put away',
-        nodes['btnbits'].hidden === true, String(nodes['btnbits'].hidden));
+        nodes['row_activation_mask'].hidden === true,
+        String(nodes['row_activation_mask'].hidden));
 
   state.config = { activation: 1, trigger_right: 0, trigger_threshold: 64,
                    activation_mask: 0x400 };
   await refresh();
   check('under a button, the buttons are shown',
-        nodes['btnbits'].hidden === false, String(nodes['btnbits'].hidden));
+        nodes['row_activation_mask'].hidden === false,
+        String(nodes['row_activation_mask'].hidden));
   check('under a button, the trigger settings are put away',
         nodes['row_trigger_right'].hidden === true &&
         nodes['row_trigger_threshold'].hidden === true,

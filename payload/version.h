@@ -9,7 +9,7 @@
  * an app update: the panel installed the copy it carried, saw the versions
  * agree, and left it. GA_BUILD comes from the source tree, so any change to
  * it is visible even when the version has not moved. */
-#define GA_VERSION "1.0.1"
+#define GA_VERSION "1.0.2"
 
 /* The control panel is a title like any other, so it appears as a running
  * game and would otherwise get the transform installed into it. Hooking our

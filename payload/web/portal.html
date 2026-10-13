@@ -91,6 +91,13 @@ color:var(--mut);border-radius:8px;padding:0;height:44px;font:inherit;
 font-size:19px;font-weight:600;line-height:1;text-align:center;cursor:pointer}
 .rcell.on{border-color:var(--acc);color:#fff;background:var(--acc)}
 .rcell.inv{border-color:var(--warn);color:#fff;background:var(--warn)}
+.bgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin:2px 0 8px}
+@media (max-width:360px){.bgrid{grid-template-columns:repeat(3,1fr)}}
+.bchip{appearance:none;border:1px solid var(--line);background:var(--bg);
+color:var(--mut);border-radius:8px;padding:0 2px;height:40px;font:inherit;
+font-size:12.5px;font-weight:600;line-height:1.1;cursor:pointer}
+.bchip.on{border-color:var(--acc);color:#fff;background:var(--acc)}
+.bchip.down{box-shadow:inset 0 0 0 2px var(--ok)}
 .on{color:var(--ok);font-weight:600}
 .warn{color:var(--warn);font-weight:600}
 .off{color:var(--mut)}
@@ -128,6 +135,19 @@ the other direction. A row can drive more than one control, so one rotation can
 move both sticks, and a column can be fed by more than one rotation.</p>
 </div></details></section>
 <div id='form'></div>
+<section id='btnbits' hidden><details open><summary>Which button</summary>
+<div class='body'>
+<div class='row'><span class='lbl'>Buttons that switch it on
+<span class='hint'>Any one of these turns it on while it is held, and each
+keeps its normal job in the game. A green outline means the controller is
+reporting that button as held right now.</span></span></div>
+<div id='btngrid' class='bgrid'></div>
+<div class='row'><span class='lbl'>Or take it from the controller
+<span class='hint'>Hold the buttons you want on the pad, then press this.
+Needs the transform to be live in a game, since that is where the buttons are
+read.</span></span>
+<button id='learnBtn'>Use what is held</button></div>
+</div></details></section>
 <section id='holdbits' hidden><details open><summary>Rest position</summary>
 <div class='body'>
 <div class='row'><span class='lbl'>Where rest is
@@ -198,6 +218,15 @@ var SRC=[['yaw','Turning'],['pitch','Tilting'],['roll','Leaning']];
 var DST=[['rx','Right<br>stick &#8646;'],['ry','Right<br>stick &#8645;'],
 ['lx','Left<br>stick &#8646;'],['ly','Left<br>stick &#8645;']];
 var ROUTE=[],MODES=[];
+/* The pad's button bits, in the order they are easiest to find on the
+ * controller rather than the order the bits happen to fall in. Any one of the
+ * chosen bits switches the transform on, which is what the service means by a
+ * button condition. */
+var BTN=[['Cross',0x4000],['Circle',0x2000],['Triangle',0x1000],['Square',0x8000],
+['L1',0x400],['R1',0x800],['L2',0x100],['R2',0x200],
+['L3',0x2],['R3',0x4],['Options',0x8],['Touchpad',0x100000],
+['Up',0x10],['Down',0x40],['Left',0x80],['Right',0x20]];
+var mask=0;
 SRC.forEach(function(s){
 MODES.push('read_'+s[0]);
 DST.forEach(function(d){ROUTE.push('route_'+s[0]+'_'+d[0])})});
@@ -229,6 +258,24 @@ e.dataset.v=v;
 e.textContent=v>0?'+':(v<0?'\u2212':'\u00b7');
 e.className='rcell'+(v>0?' on':(v<0?' inv':''));
 }
+function buildButtons(){
+var h='';
+BTN.forEach(function(b,i){
+h+="<button class='bchip' id='btn_"+i+"'>"+esc(b[0])+'</button>'});
+el('btngrid').innerHTML=h;
+BTN.forEach(function(b,i){
+el('btn_'+i).addEventListener('click',function(){
+/* Leaving nothing chosen would mean the condition could never be met, so
+   the last one standing cannot be turned off. */
+var next=mask^b[1];
+if(!next)return;
+mask=next;paintButtons();put()})})}
+
+function paintButtons(){
+BTN.forEach(function(b,i){
+var e=el('btn_'+i);
+if(e)e.className='bchip'+((mask&b[1])?' on':'')})}
+
 function build(){
 var h='';
 SPEC.forEach(function(g,gi){
@@ -278,7 +325,8 @@ var e=el(k);
 return k+'='+(e.type==='checkbox'?(e.checked?1:0):e.value)})
 .concat(ROUTE.map(function(k){
 return k+'='+(parseInt(el(k).dataset.v||'0',10))}))
-.concat(MODES.map(function(k){return k+'='+el(k).value})).join('&');
+.concat(MODES.map(function(k){return k+'='+el(k).value}))
+.concat(['activation_mask='+mask]).join('&');
 fetch('/api/set?'+q).then(function(r){return r.json()}).then(function(j){
 apply(j.config)}).catch(function(){}).then(function(){
 busy=0;if(pending){pending=0;put()}})}
@@ -298,6 +346,18 @@ if(hold)holding=true;
 var a=el('row_strength_'+s[0]),b=el('row_full_angle_'+s[0]);
 if(a)a.hidden=hold;
 if(b)b.hidden=!hold});
+/* The condition decides which of its settings mean anything. A trigger
+   threshold is meaningless for a button, and the choice of trigger was being
+   left on screen under a button condition where it does nothing at all. */
+var cond=c.activation;
+var tr=el('row_trigger_right'),th=el('row_trigger_threshold');
+if(tr)tr.hidden=cond!==2;
+if(th)th.hidden=cond!==2;
+var bb=el('btnbits');
+if(bb)bb.hidden=cond!==1;
+if(c.activation_mask!==undefined&&c.activation_mask!==mask){
+mask=c.activation_mask;paintButtons()}
+
 var hs=el('holdbits');
 if(hs)hs.hidden=!holding;
 var hg=el('sec_holding');
@@ -424,7 +484,12 @@ el('v_defl').textContent=(L.out_frac*100).toFixed(1)+'%';
 el('v_in').textContent=L.in_x+', '+L.in_y;
 el('v_out').textContent=L.out_x+', '+L.out_y;
 el('v_trig').textContent='L2 '+L.l2+'  R2 '+L.r2;
-el('v_drift').textContent=L.cal_active?'aiming':(L.cal_count+' still');
+/* Which buttons the pad says are down, so choosing one is a matter of
+   pressing it rather than guessing what it is called here. */
+BTN.forEach(function(b,i){
+var e=el('btn_'+i);
+if(e)e.className='bchip'+((mask&b[1])?' on':'')+((L.buttons&b[1])?' down':'')});
+el('v_drift').textContent=L.cal_count+' still'+(L.cal_active?', aiming':'');
 /* How far each rotation is from rest, and whether gravity is the thing it is
  * being measured against. A rotation measured from gravity cannot creep. One
  * that is only being added up will, so saying which is which turns a
@@ -456,7 +521,18 @@ drawCurve();drawSens();
 el('dot').className='bad';
 el('statusText').textContent='no connection to the service'})}
 buildRouting();
+buildButtons();
 build();
+el('learnBtn').addEventListener('click',function(){
+var held=live&&live.buttons;
+/* Only bits this page offers: the pad also reports bits with no business
+   being a condition. */
+var pick=0;
+BTN.forEach(function(b){if(held&b[1])pick|=b[1]});
+if(!pick){
+el('statusText').textContent='no button was held; hold it and press again';
+return}
+mask=pick;paintButtons();put()});
 el('setRest').addEventListener('click',function(){
 fetch('/api/rest').then(tick)});
 el('saveTitle').addEventListener('click',function(){

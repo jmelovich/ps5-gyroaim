@@ -277,9 +277,14 @@ static void report(const ga_args_t *t)
            (unsigned long long)t->rumble_mode_ts);
     ga_log("  pad read returned 0x%x, handle %d, connected %u",
            (unsigned)t->last_result, t->last_handle, t->connected);
+    /* Whether aiming was engaged no longer decides anything: a window is
+     * judged by how small the offset in it is. Saying "not usable" here was
+     * left over from when it did, and with the condition set to Always it
+     * labelled every window that way while the offset was in fact being
+     * learned from all of them. */
     ga_log("  reads %llu, applied %llu, stillness window %u sample(s)%s",
            (unsigned long long)t->calls, (unsigned long long)t->applied,
-           t->cal_count, t->cal_was_active ? " (aiming, not usable)" : "");
+           t->cal_count, t->cal_was_active ? " (while aiming)" : "");
 }
 
 /* One attempt at hooking a game.

@@ -67,6 +67,11 @@ typedef struct {
     uint64_t mapbase;       /* the object being read, 0 when not started */
     uint64_t offset;        /* how far into it */
     int      done;          /* the walk finished, so there is nothing left */
+    /* Candidate gateways tested so far in this attempt. Each test reads the
+     * game's memory, so the budget has to span the whole sweep: spending it
+     * afresh on every pass starved the slot hunt the sweep is actually for,
+     * and a large module then took minutes instead of seconds. */
+    unsigned orphan_tests;
 } ga_scan_cursor_t;
 
 #define GA_MAX_SLOTS 24

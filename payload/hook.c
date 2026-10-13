@@ -177,7 +177,7 @@ volatile int ga_hook_cancel = 0;
 /* Each test costs a read of the game's memory, so there is a ceiling. The
  * filter below spends them only on addresses that could actually hold a
  * gateway, which is few enough that this is generous. */
-#define ORPHAN_TEST_CAP    4096u
+#define ORPHAN_TEST_CAP    6000u
 
 /* Where each loaded module sits, so an address inside one can be dismissed
  * without a read. */
@@ -582,7 +582,11 @@ int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max,
                        ga_orphan_t *orphan, ga_scan_cursor_t *cursor)
 {
     uint64_t head = 0;
-    unsigned found = 0, objects = 0, scanned = 0, tests = 0;
+    unsigned found = 0, objects = 0, scanned = 0;
+    /* Carried across passes, so the orphan hunt cannot keep restarting its
+     * budget and crowding out the sweep. */
+    unsigned local_tests = 0;
+    unsigned *tests_at = cursor ? &cursor->orphan_tests : &local_tests;
     uint64_t deadline = now_ms() + GA_SCAN_BUDGET_MS;
     uint64_t resume_at = cursor ? cursor->offset : 0;
     uint64_t resume_in = cursor ? cursor->mapbase : 0;
@@ -682,7 +686,7 @@ int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max,
                         if (t->fn[k] && value == (uint64_t)t->fn[k])
                             known = 1;
                     if (!known)
-                        note_orphan(t->pid, value, orphan, &tests);
+                        note_orphan(t->pid, value, orphan, tests_at);
                 }
 
                 for (int k = 0; k < GA_FN_COUNT; k++) {
@@ -741,7 +745,7 @@ int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max,
         }
         ga_log("scan: %u object(s) scanned of %u walked, %u pad slot(s) found, "
                "%u gateway candidate(s) tested", scanned, objects, found,
-               tests);
+               *tests_at);
     }
     return (int)found;
 }

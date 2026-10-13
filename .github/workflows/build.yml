@@ -126,28 +126,10 @@ jobs:
               exit 0
           fi
 
-          previous=$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null || true)
-          {
-              printf '## Installing\n\n'
-              printf 'Unpack `%s` into `/data/homebrew/` on the console, then launch\n' \
-                  "$(basename "$ZIP")"
-              printf '**GyroAim** from the home screen and choose **start the service**.\n'
-              printf 'The app carries the service inside it, so there is nothing else to install.\n\n'
-              printf '## What you need\n\n'
-              printf -- '- A jailbroken PS5 with an ELF loader on port 9021 and kstuff loaded.\n'
-              printf -- '- ShadowMount+ to register the title, and new enough to mount `/data`\n'
-              printf '  if you want the service to start with the console.\n\n'
-              printf '## Settings\n\n'
-              printf 'The panel shows a QR code for the settings page. Open it on a phone on the\n'
-              printf 'same network and tune the aiming while you play.\n\n'
-              if [[ -n $previous ]]; then
-                  printf '## Changes\n\n'
-                  printf 'https://github.com/%s/compare/%s...%s\n\n' \
-                      "$GITHUB_REPOSITORY" "$previous" "$GITHUB_REF_NAME"
-              fi
-              printf 'Experimental homebrew. It writes into a running game: save first.\n'
-              printf 'Not affiliated with Sony. Contains no licensed code.\n'
-          } > notes.md
+          # Written by hand per release in docs/releases/<tag>.md, with the
+          # boilerplate generated around it. Shared with the command line so
+          # the notes can be read and checked before anyone publishes them.
+          tools/release-notes.sh "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" > notes.md
 
           gh release create "$GITHUB_REF_NAME" \
               --draft \

@@ -2,7 +2,7 @@
 # compiler, so they run anywhere and need no console.
 CC      ?= cc
 CFLAGS  := -Wall -Wextra -O1 -g -std=gnu11
-BIN     := curve_test transform_test qr_test
+BIN     := curve_test transform_test qr_test config_test
 
 .PHONY: all clean check
 
@@ -18,7 +18,14 @@ transform_test: transform_test.c ../payload/config.c ../payload/log.c \
 qr_test: qr_test.c ../app/src/vendor/qrcodegen.c
 	$(CC) $(CFLAGS) -o $@ $^
 
+# The settings layering reads real files, so it gets a directory of its own
+# rather than the console's /data, which does not exist here.
+config_test: config_test.c ../payload/config.c ../payload/log.c
+	$(CC) $(CFLAGS) -DGA_DIR='"$(CURDIR)/build/conf"' -o $@ $^ -lm
+
 check: all
+	@mkdir -p build/conf && rm -f build/conf/*.txt
+	./config_test
 	./curve_test
 	./transform_test
 	./qr_test

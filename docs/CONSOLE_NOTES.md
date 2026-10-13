@@ -403,3 +403,34 @@ than by whether aiming was engaged, relearned it as
 `0.00018, -0.0001, 0.00034` within a minute of attaching. A resting offset is
 small by definition; three degrees a second is already far more than any gyro
 reads at rest, so anything beyond that is the pad genuinely turning.
+
+## Per-game settings leaked from one game into the next
+
+Reported from a console: a game was launched, the page showed that game's id,
+and the settings in use were the previous game's. Two faults in the same few
+lines, and both had been there since the first release.
+
+A game's profile was loaded straight over whatever was already live, so every
+key the profile did not name kept the last game's value. The service writes
+every key when it saves, so a profile written by the current build names them
+all and the leak is invisible; a profile written by an older build names only
+the keys that existed then. Every setting added since widens the gap, which
+means the fault got steadily worse with each release while looking fine on any
+freshly written profile.
+
+The second fault was worse. A game with no profile at all set the path to the
+general settings but never loaded them, so the previous game's settings stayed
+in force and the next change saved them straight over the general ones. That
+is how a general preset gets replaced by whatever was last played.
+
+Settings for a game are now rebuilt from the bottom up every time: the
+built-in defaults, then the general settings, then that game's own profile,
+each overriding only the keys it holds. A key missing from a profile falls back
+to the general setting and then to the default, never to another game.
+
+Measured consequence before the fix: a profile from the first release holding
+only `activation` and `trigger_right` was loaded while another game's settings
+were live, and the service then wrote the merged result back over it, so the
+borrowed values became that game's saved profile. The keys the old profile
+named survived. The rest were lost, and nothing in the log records what they
+had been.

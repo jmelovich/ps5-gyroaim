@@ -408,11 +408,13 @@ int main(void)
     }
     write_pidfile();
 
-    snprintf(active_path, sizeof(active_path), "%s", GA_CONFIG_PATH);
-    if (ga_config_load(&web.cfg, active_path) == 0)
-        ga_log("settings loaded from %s", active_path);
-    else if (ga_config_save(&web.cfg, active_path) == 0)
-        ga_log("wrote default settings to %s", active_path);
+    ga_config_for_title(&web.cfg, NULL, active_path, sizeof(active_path));
+    /* Written back whole. A file from an older build gains the keys added
+     * since, rather than leaving them to the defaults on every run. These are
+     * the base layer, so a complete set is exactly what is wanted here; a
+     * game's own profile stays sparse and overrides only what it names. */
+    if (ga_config_save(&web.cfg, active_path) == 0)
+        ga_log("settings kept in %s", active_path);
     ga_config_to_args(&web.cfg, &settings);
     settings.cal_epoch = cal_epoch;
     snprintf(web.path, sizeof(web.path), "%s", active_path);
@@ -469,7 +471,8 @@ int main(void)
         }
         if (web.reload_request) {
             web.reload_request = 0;
-            if (ga_config_load(&web.cfg, active_path) == 0) {
+            if (ga_config_for_title(&web.cfg, title, active_path,
+                                    sizeof(active_path)) >= 0) {
                 ga_log("settings reread from %s", active_path);
                 web.cfg_dirty = 1;
             }
@@ -498,18 +501,14 @@ int main(void)
                 continue;
             }
 
-            /* A profile saved for this title takes over; otherwise the
-             * general settings stay in force. */
-            char per_title[GA_PATH_MAX];
-            ga_config_title_path(title, per_title, sizeof(per_title));
+            /* Rebuilt from the defaults and the general settings up, so
+             * nothing of the game just left can survive into this one. */
             pthread_mutex_lock(&web.lock);
-            if (ga_config_load(&web.cfg, per_title) == 0) {
-                snprintf(active_path, sizeof(active_path), "%s", per_title);
-                ga_log("using the profile saved for %s", title);
-            } else {
-                snprintf(active_path, sizeof(active_path), "%s",
-                         GA_CONFIG_PATH);
-            }
+            int own = ga_config_for_title(&web.cfg, title, active_path,
+                                          sizeof(active_path));
+            ga_log(own == 1 ? "using the profile saved for %s"
+                            : "no profile saved for %s; general settings",
+                   title);
             snprintf(web.path, sizeof(web.path), "%s", active_path);
             ga_config_to_args(&web.cfg, &settings);
             settings.cal_epoch = cal_epoch;

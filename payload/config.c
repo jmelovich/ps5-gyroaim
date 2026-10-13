@@ -582,6 +582,48 @@ int ga_config_load(ga_config_t *c, const char *path)
     return 0;
 }
 
+/* Builds the settings in force for one game, from the bottom up.
+ *
+ * Three layers: the built-in defaults, then the general settings, then the
+ * profile saved for this game. Each layer only overrides the keys it actually
+ * holds, so a key missing from a game's profile falls back to the general
+ * setting, and one missing from both falls back to the default.
+ *
+ * Starting from the defaults every time is the whole point of this function.
+ * Loading a profile straight over whatever happened to be live left every key
+ * the profile did not mention sitting at the previous game's value. A profile
+ * written by an older build mentions fewer keys with every setting added
+ * since, so the longer the tool lived the more of one game's settings leaked
+ * into another. Worse, a game with no profile at all kept the previous game's
+ * settings entirely, and the next change then saved them straight over the
+ * general ones, which is how a general preset got quietly replaced by
+ * whatever was last played.
+ *
+ * Returns 1 when this game has a profile of its own, 0 when the general
+ * settings are in force, and writes the path that later changes belong in.
+ */
+int ga_config_for_title(ga_config_t *c, const char *title,
+                        char *path, size_t n)
+{
+    char per_title[GA_PATH_MAX];
+
+    if (!c || !path || !n)
+        return -1;
+
+    ga_config_defaults(c);
+    ga_config_load(c, GA_CONFIG_PATH);
+
+    if (title && title[0]) {
+        ga_config_title_path(title, per_title, sizeof(per_title));
+        if (ga_config_load(c, per_title) == 0) {
+            snprintf(path, n, "%s", per_title);
+            return 1;
+        }
+    }
+    snprintf(path, n, "%s", GA_CONFIG_PATH);
+    return 0;
+}
+
 int ga_config_save(const ga_config_t *c, const char *path)
 {
     FILE *f = fopen(path, "w");

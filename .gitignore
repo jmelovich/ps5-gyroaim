@@ -18,6 +18,7 @@ app/dist/
 tests/curve_test
 tests/transform_test
 tests/qr_test
+tests/config_test
 tests/qr-sample.pgm
 tests/qr-sample.png
 app/src/version_service.h

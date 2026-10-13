@@ -6,7 +6,11 @@
 
 #include <stdint.h>
 
+/* Overridable so the settings layering can be exercised on a host, where
+ * there is no /data. */
+#ifndef GA_DIR
 #define GA_DIR              "/data/gyroaim"
+#endif
 #define GA_CONFIG_PATH      GA_DIR "/settings.txt"
 #define GA_PATH_MAX         96
 
@@ -99,6 +103,13 @@ int ga_config_save(const ga_config_t *c, const char *path);
 
 /* GA_DIR/<title>.txt, so each game can keep its own numbers. */
 void ga_config_title_path(const char *title, char *out, size_t n);
+
+/* The settings in force for one game: defaults, then the general settings,
+ * then that game's own profile, each layered over the last. Writes the path
+ * later changes belong in. 1 if the game has a profile, 0 if not, -1 on bad
+ * arguments. */
+int ga_config_for_title(ga_config_t *c, const char *title,
+                        char *path, size_t n);
 
 /* Fills the settings half of the shared page, including the sampled curves. */
 void ga_config_to_args(const ga_config_t *c, ga_args_t *a);

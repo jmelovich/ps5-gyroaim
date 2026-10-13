@@ -430,12 +430,23 @@ el('v_drift').textContent=L.cal_active?'aiming':(L.cal_count+' still');
  * that is only being added up will, so saying which is which turns a
  * mystery into a reading. */
 var nm=['turn','tilt','lean'];
+var md=[cfg.read_yaw,cfg.read_pitch,cfg.read_roll];
 el('v_held').textContent=L.held.map(function(h,i){
 return nm[i]+' '+h.toFixed(0)+'\u00b0'}).join('  ');
 var abs=L.hold_abs||[0,0,0];
-var sure=nm.filter(function(n,i){return abs[i]});
-el('v_ref').textContent=sure.length?('gravity: '+sure.join(', ')):'adding up only';
-el('v_ref').className=sure.length===3?'on':(sure.length?'':'warn');
+/* Only the rotations actually being held matter here. One measured from
+ * gravity cannot creep; one that is only being added up will, and saying
+ * which is which is the difference between a reading and a mystery. */
+var hold=[0,1,2].filter(function(i){return md[i]===1});
+var loose=hold.filter(function(i){return !abs[i]});
+if(!hold.length){el('v_ref').textContent='nothing held';el('v_ref').className=''}
+else if(!loose.length){
+el('v_ref').textContent='gravity: '+hold.map(function(i){return nm[i]}).join(', ');
+el('v_ref').className='on'}
+else{
+el('v_ref').textContent=loose.map(function(i){return nm[i]}).join(', ')+
+' will creep';
+el('v_ref').className='warn'}
 var camFrac=cfg.max_turn>0?
 Math.min(1,Math.hypot(L.want[0][0],L.want[0][1])/cfg.max_turn):0;
 trail.push([Math.min(1,L.out_frac),camFrac]);

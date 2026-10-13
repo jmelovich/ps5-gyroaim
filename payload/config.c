@@ -284,6 +284,10 @@ void ga_config_to_args(const ga_config_t *c, ga_args_t *a)
 #define CAL_FIRST_MAX     0.150f     /* a larger first offset is real motion */
 #define CAL_STEP_MAX      0.040f     /* later, drift only creeps */
 #define CAL_EASE          0.5f
+/* The most a resting offset can plausibly be. A gyro at rest reads a little
+ * off zero and that is what this learns; anything larger is the pad actually
+ * turning, however steadily. About three degrees a second. */
+#define CAL_BIAS_MAX      0.052f     /* rad/s */
 
 int ga_config_calibrate(ga_config_t *c, const ga_args_t *live, uint32_t *epoch)
 {
@@ -297,11 +301,6 @@ int ga_config_calibrate(ga_config_t *c, const ga_args_t *live, uint32_t *epoch)
         return 0;
 
     /* Aiming happened during this window, so it proves nothing. */
-    if (live->cal_was_active) {
-        (*epoch)++;
-        return 0;
-    }
-
     for (int i = 0; i < 3; i++) {
         if (live->cal_max[i] - live->cal_min[i] > CAL_GYRO_SPREAD ||
             live->cal_amax[i] - live->cal_amin[i] > CAL_ACCEL_SPREAD) {
@@ -315,6 +314,20 @@ int ga_config_calibrate(ga_config_t *c, const ga_args_t *live, uint32_t *epoch)
     for (int i = 0; i < 3; i++) {
         mean[i] = live->cal_sum[i] / (float)live->cal_count;
         if (fabsf(mean[i] - c->bias[i]) > limit) {
+            (*epoch)++;
+            return 0;
+        }
+        /* What tells a resting offset from a slow deliberate turn is how big
+         * it is, not whether aiming happened to be engaged.
+         *
+         * This used to throw away every window in which aiming was active,
+         * on the grounds that a slow turn about gravity looks like stillness
+         * to the accelerometer. True, but with the condition set to Always
+         * aiming is active every moment the service runs, so the offset was
+         * never learned at all, and the one rotation gravity cannot check
+         * crept about a degree and a half a minute. Over a session that is
+         * most of a half turn. */
+        if (fabsf(mean[i]) > CAL_BIAS_MAX) {
             (*epoch)++;
             return 0;
         }

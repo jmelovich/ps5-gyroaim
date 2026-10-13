@@ -387,3 +387,19 @@ restart and the game had to be restarted by hand.
 Two facts dismiss nearly every candidate without a read: a gateway is laid out
 on a sixteen-byte stride, and it lives on a page the service mapped, which is
 not inside any module the game loaded.
+
+## Drift calibration never ran with the condition set to Always
+
+The resting-offset learner threw away any window in which aiming had been
+active, on the grounds that a slow turn about gravity looks exactly like
+stillness to the accelerometer. That is true, but with the activation
+condition set to Always, aiming is active every moment the service runs, so
+the offset was never learned at all.
+
+Measured on the console: the stored offset sat at `-0.001, 0.0, 0.00014` rad/s
+and turning crept about a degree and a half a minute, which over a session is
+most of a half turn. Judging a window by how big the offset is instead, rather
+than by whether aiming was engaged, relearned it as
+`0.00018, -0.0001, 0.00034` within a minute of attaching. A resting offset is
+small by definition; three degrees a second is already far more than any gyro
+reads at rest, so anything beyond that is the pad genuinely turning.

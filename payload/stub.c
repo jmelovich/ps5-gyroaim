@@ -85,6 +85,10 @@ static INLINE float lut(const ga_args_t *a, const volatile float *table,
     x = fclamp(a, x, a->k.zero, a->k.one);
     scaled = x * a->k.lut_scale;
     i = (int)scaled;
+    /* Both ends, not just the top. A negative index would read off the front
+     * of the shared page, inside the game's address space. */
+    if (i < 0)
+        return table[0];
     if (i >= GA_LUT_LAST)
         return table[GA_LUT_LAST];
     return table[i] + (table[i + 1] - table[i]) * (scaled - (float)i);
@@ -197,6 +201,70 @@ static INLINE void rates(const ga_args_t *a, const float av[3],
     local[GA_SRC_YAW] = w[iy] * a->k.rad_to_deg;
     local[GA_SRC_PITCH] = w[ip] * a->k.rad_to_deg;
     local[GA_SRC_ROLL] = w[ir] * a->k.rad_to_deg;
+}
+
+/* Which gyro axis each rotation is read from, with a sane fallback for a
+ * value the page should never send. */
+static INLINE uint32_t hold_axis(const ga_args_t *a, int src)
+{
+    if (src == GA_SRC_YAW)
+        return a->axis_yaw > 2 ? 1u : a->axis_yaw;
+    if (src == GA_SRC_PITCH)
+        return a->axis_pitch > 2 ? 0u : a->axis_pitch;
+    return a->axis_roll > 2 ? 2u : a->axis_roll;
+}
+
+/* How far the pad has rotated about one of its own axes since rest, measured
+ * against gravity. Returns 1 and writes the angle in degrees when gravity can
+ * answer, 0 when it cannot.
+ *
+ * Gravity is a fixed direction the pad can always feel, so the angle it gives
+ * is absolute: it is the same after an hour as after a second. That is the
+ * point. Adding rates up instead gives an answer that creeps, and a creeping
+ * answer in hold mode is worse than useless, because once it has crept past
+ * full scale the control sits pinned and stops responding to rotation one way
+ * entirely.
+ *
+ * For a rotation about one axis, gravity's two components across that axis
+ * turn by exactly that angle and the third is untouched. So comparing those
+ * two components against where they sat at rest gives the sine and cosine of
+ * the rotation outright, with nothing to integrate.
+ *
+ * The one case gravity cannot answer is a rotation about gravity itself: a
+ * pad lying flat, turned about its vertical. The across components are then
+ * both near zero and carry no angle, which is what the length test rejects.
+ */
+static INLINE int gravity_angle(const ga_args_t *a, const float gn[3],
+                                uint32_t k, float *degrees, float *trust)
+{
+    uint32_t u = k == 2u ? 0u : k + 1u;      /* the two axes across k, in */
+    uint32_t v = u == 2u ? 0u : u + 1u;      /* right-handed order */
+
+    /* Rest crossed with now, and rest dotted with now, both over the plane
+     * across k. The pad turning one way moves gravity the other way in the
+     * pad's own frame, hence the order of the cross. */
+    float sn = a->rest_g[v] * gn[u] - a->rest_g[u] * gn[v];
+    float cs = a->rest_g[u] * gn[u] + a->rest_g[v] * gn[v];
+    float len = __builtin_sqrtf(sn * sn + cs * cs);
+
+    /* len is how much of gravity lies across this axis, squared. Below a
+     * quarter the axis is within thirty degrees of gravity and the reading is
+     * mostly noise. */
+    if (len < a->k.quarter)
+        return 0;
+    /* How much of gravity lies across this axis, and so how much the answer
+     * is worth: all of it for an axis square to gravity, none for one lying
+     * along it. */
+    *trust = len > a->k.one ? a->k.one : len;
+
+    float mag = fabs_(a, sn) / len;
+    if (mag > a->k.one)
+        mag = a->k.one;
+    float deg = lut(a, a->lut_asin, mag);
+    if (cs < a->k.zero)
+        deg = a->k.half_turn - deg;          /* past a right angle */
+    *degrees = sn < a->k.zero ? a->k.zero - deg : deg;
+    return 1;
 }
 
 /* Tremor handling: pull very slow rotation toward zero, and blend slow
@@ -439,9 +507,14 @@ static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
     int active = a->enabled && age <= GA_STALE_READS && is_active(a, data);
 
     /* Taking rest from the moment the condition engages means pressing the
-     * trigger says "straight ahead is here", and nothing has time to drift. */
-    if (active && !a->was_active && a->rest_on_activate)
-        a->rest_epoch = a->rest_epoch + 1;
+     * trigger says "straight ahead is here", and nothing has time to drift.
+     *
+     * This is handled entirely in state the stub owns. Asking for it by
+     * bumping rest_epoch looked tidier and was badly wrong: the service
+     * republishes rest_epoch about ten times a second from its own copy, so
+     * the bump was wiped and the difference the stub compares against flipped
+     * back and forth, resetting the remembered angle at random. */
+    int engaged = active && !a->was_active;
     a->was_active = active ? 1u : 0u;
 
     feed_calibration(a, av, ac, active);
@@ -493,13 +566,58 @@ static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
      * tightening or smoothing. Those shrink slow movement, which is fine for
      * feel but ruinous for an integral: turning out quickly and back slowly
      * would not cancel. */
-    if (a->rest_seen != a->rest_epoch) {
+    /* Gravity, normalised, when the pad is not being shaken. A reading well
+     * away from one g means the pad is accelerating and the direction it
+     * reports is not down. */
+    float gn[3];
+    int have_gravity = 0;
+    {
+        float gm = __builtin_sqrtf(ac[0] * ac[0] + ac[1] * ac[1] +
+                                   ac[2] * ac[2]);
+        float lo = a->k.half + a->k.half * a->k.half;      /* 0.75 */
+        float hi = a->k.one + a->k.half * a->k.half;       /* 1.25 */
+        if (gm > lo && gm < hi) {
+            gn[0] = ac[0] / gm;
+            gn[1] = ac[1] / gm;
+            gn[2] = ac[2] / gm;
+            have_gravity = 1;
+        } else {
+            gn[0] = a->k.zero;
+            gn[1] = a->k.zero;
+            gn[2] = a->k.zero;
+        }
+    }
+
+    if (a->rest_seen != a->rest_epoch ||
+        (engaged && a->rest_on_activate)) {
         a->rest_seen = a->rest_epoch;
         for (int i = 0; i < GA_SRC_COUNT; i++)
             a->angle[i] = a->k.zero;
+        /* Rest is a direction, not just a zero. Remembering where gravity
+         * pointed is what lets the angle be measured later instead of
+         * accumulated. */
+        a->rest_g[0] = gn[0];
+        a->rest_g[1] = gn[1];
+        a->rest_g[2] = gn[2];
+        a->rest_g_ok = have_gravity ? 1u : 0u;
     }
+
     if (fresh && dt > a->k.zero) {
         for (int i = 0; i < GA_SRC_COUNT; i++) {
+            /* Adding the rate up is what makes the angle quick and smooth and
+             * able to follow the pad past a right angle and all the way back.
+             * On its own it also creeps, without limit, because nothing ever
+             * tells it where it really is. One long session had turning sat
+             * 147 degrees from a full scale of 30: pinned, and deaf to
+             * rotation one way for a quarter turn.
+             *
+             * So add the rate up, then pull the result onto the angle gravity
+             * measures. Gravity is a direction the pad can always feel, so
+             * its answer is absolute and never creeps, and the pull is
+             * weighted by how much of gravity lies across the axis in
+             * question. An axis square to gravity is corrected in about a
+             * quarter of a second; one lying along it, which gravity cannot
+             * see at all, is left to the sum. */
             float next = a->angle[i] + local[i] * dt;
             if (a->recentre > a->k.zero) {
                 float shed = a->recentre * dt;
@@ -507,6 +625,24 @@ static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
                     shed = a->k.one;
                 next = next - next * shed;
             }
+
+            float measured, trust;
+            a->hold_abs[i] = 0u;
+            if (have_gravity && a->rest_g_ok && a->hold_correct > a->k.zero &&
+                gravity_angle(a, gn, hold_axis(a, i), &measured, &trust)) {
+                float gap = measured - next;
+                /* Gravity cannot tell a quarter turn one way from three
+                 * quarters the other, so once the two answers are a right
+                 * angle apart the sum is the one to believe. */
+                if (fabs_(a, gap) < a->k.right_angle) {
+                    float pull = trust * a->hold_correct * dt;
+                    if (pull > a->k.one)
+                        pull = a->k.one;
+                    next = next + gap * pull;
+                    a->hold_abs[i] = 1u;
+                }
+            }
+
             float cap = a->angle_cap[i] > a->k.eps ? a->angle_cap[i]
                                                    : a->k.one;
             a->angle[i] = fclamp(a, next, a->k.zero - cap, cap);

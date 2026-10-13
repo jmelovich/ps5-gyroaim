@@ -174,7 +174,18 @@ volatile int ga_hook_cancel = 0;
 
 /* How many unrecognised slot values may be followed while looking for a
  * gateway left behind by an earlier run. */
-#define ORPHAN_TEST_CAP    256u
+/* Each test costs a read of the game's memory, so there is a ceiling. The
+ * filter below spends them only on addresses that could actually hold a
+ * gateway, which is few enough that this is generous. */
+#define ORPHAN_TEST_CAP    4096u
+
+/* Where each loaded module sits, so an address inside one can be dismissed
+ * without a read. */
+#define RANGE_MAX          64u
+typedef struct {
+    uint64_t base;
+    uint64_t size;
+} ga_range_t;
 
 static void note_orphan(pid_t pid, uint64_t value, ga_orphan_t *orphan,
                         unsigned *tests);
@@ -480,6 +491,58 @@ static int gateway_args(pid_t pid, intptr_t value, intptr_t *out_args,
     return 1;
 }
 
+/* Could this value be a gateway we left behind?
+ *
+ * Deciding costs a read of the game's memory, and a module holds millions of
+ * eight-byte values, so nearly all of them have to be dismissed without one.
+ * Two facts do it. A gateway is laid out on a sixteen-byte stride, and it
+ * lives on a page this service mapped, which is not part of any module the
+ * game loaded. Pointers into a module are the module's own business.
+ *
+ * Without this the budget went on the first few kilobytes of whatever module
+ * came first, and a gateway sitting past that was never examined. A hundred
+ * and seventy megabyte executable made that a certainty, and the service
+ * could then never take a game back after its own restart: the slots held
+ * gateways it could not recognise, so the game had to be restarted by hand.
+ */
+static int could_be_gateway(uint64_t value, const ga_range_t *ranges,
+                            unsigned count)
+{
+    if (!value || value >= (uint64_t)INTPTR_MAX)
+        return 0;
+    if (value & 15u)
+        return 0;
+    if (value < 0x10000u)              /* no mapping down there */
+        return 0;
+    for (unsigned i = 0; i < count; i++)
+        if (value >= ranges[i].base && value < ranges[i].base + ranges[i].size)
+            return 0;
+    return 1;
+}
+
+/* Walks the linker's object list once and records where every module sits. */
+static unsigned collect_ranges(const ga_target_t *t, uint64_t head,
+                               ga_range_t *out, unsigned max)
+{
+    unsigned count = 0, objects = 0;
+    uint64_t at = head;
+
+    while (at && objects < OBJ_LIST_MAX && count < max) {
+        ga_rtld_object_t o;
+
+        if (read_any(t->pid, (intptr_t)at, &o, sizeof(o)) != 0)
+            break;
+        objects++;
+        at = o.next;
+        if (!object_sane(&o))
+            continue;
+        out[count].base = o.mapbase;
+        out[count].size = o.mapsize;
+        count++;
+    }
+    return count;
+}
+
 /* Tests one slot value for being a gateway we left behind, with a cap so a
  * pointer-dense module cannot turn this into a sweep. */
 static void note_orphan(pid_t pid, uint64_t value, ga_orphan_t *orphan,
@@ -538,6 +601,9 @@ int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max,
         return -1;
     if (!(chunk = malloc(SCAN_CHUNK)))
         return -1;
+
+    ga_range_t ranges[RANGE_MAX];
+    unsigned nranges = collect_ranges(t, head, ranges, RANGE_MAX);
 
     uint64_t at = head;
     while (at && objects < OBJ_LIST_MAX && found < max && !ga_hook_cancel) {
@@ -608,9 +674,9 @@ int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max,
                 if (!value)
                     continue;
 
-                /* Values inside the module being read are its own data, never
-                 * a gateway, which lives in a mapping we made. */
-                if (value < o.mapbase || value >= o.mapbase + o.mapsize) {
+                /* A value pointing into any loaded module is that module's
+                 * own data. A gateway lives on a page we mapped. */
+                if (could_be_gateway(value, ranges, nranges)) {
                     int known = 0;
                     for (int k = 0; k < GA_FN_COUNT; k++)
                         if (t->fn[k] && value == (uint64_t)t->fn[k])
@@ -673,8 +739,9 @@ int ga_hook_scan_slots(const ga_target_t *t, ga_slot_t *out, unsigned max,
             cursor->offset = 0;
             cursor->done = 1;
         }
-        ga_log("scan: %u object(s) scanned of %u walked, %u pad slot(s) found",
-               scanned, objects, found);
+        ga_log("scan: %u object(s) scanned of %u walked, %u pad slot(s) found, "
+               "%u gateway candidate(s) tested", scanned, objects, found,
+               tests);
     }
     return (int)found;
 }

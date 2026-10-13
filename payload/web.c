@@ -109,6 +109,7 @@ static int state_json(ga_web_state_t *st, char *out, size_t n)
                   "\"in\":[%u,%u,%u,%u],\"out\":[%u,%u,%u,%u],"
                   "\"l2\":%u,\"r2\":%u,\"buttons\":%u,"
                   "\"held\":[%.1f,%.1f,%.1f],"
+                  "\"hold_abs\":[%u,%u,%u],"
                   "\"cal_count\":%u,\"cal_active\":%u,\"rumble_level\":%u,"
                   "\"calls\":%llu,\"applied\":%llu}}",
                   l->active, l->saturated,
@@ -122,6 +123,8 @@ static int state_json(ga_web_state_t *st, char *out, size_t n)
                   l->last_l2, l->last_r2, l->last_buttons,
                   (double)l->held[GA_SRC_YAW], (double)l->held[GA_SRC_PITCH],
                   (double)l->held[GA_SRC_ROLL],
+                  l->hold_abs[GA_SRC_YAW], l->hold_abs[GA_SRC_PITCH],
+                  l->hold_abs[GA_SRC_ROLL],
                   l->cal_count, l->cal_was_active, l->rumble_last_level,
                   (unsigned long long)l->calls,
                   (unsigned long long)l->applied);

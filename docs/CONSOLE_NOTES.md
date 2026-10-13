@@ -320,3 +320,70 @@ round-trip error is under half a percent, so it passes through intact.
 
 Signs live in the matrix as floats the stub multiplies by, since it still
 cannot negate one.
+
+## A held angle built from rotation rates creeps, and then lies
+
+Measured on the console after one session, with the pad lying still:
+
+    held = [147.1, -97.6, -50.7]   degrees from rest
+    full scale: turning 30, leaning 35
+    turning -> left stick x at -1, leaning -> left stick x at -1
+
+Both of those are many times their full scale, pinned, and pinned in opposite
+directions on the same control, so they cancelled. The control sat centred at
+rest, went hard over when leaned one way, and did nothing at all when leaned
+the other, because that rotation was already past full and could not go
+further. Asking for rest by hand fixed it until it crept back.
+
+The cause was reading hold mode as a running total of the rotation rate. A
+rate sensor has a small offset that never averages out, every real rotation is
+added in whether it was meant as input or not, and nothing ever tells the
+total where it really is. Over a session it wanders without limit. Raising the
+ceiling makes it worse, not better: a bigger ceiling is further to come back
+from.
+
+Gravity fixes two thirds of it. It is a direction the pad can always feel, so
+the angle measured against it is absolute and cannot creep. For a rotation
+about one axis, gravity's two components across that axis turn by exactly that
+angle, so comparing them with where they sat at rest gives the sine and cosine
+outright. There is no arcsine the injected block can call, so the service
+samples one onto the shared page beside the response curves.
+
+The rate is still added up, because that is what makes the angle quick and
+smooth and able to follow the pad past a right angle and back. The sum is then
+pulled onto what gravity measures, weighted by how much of gravity lies across
+the axis in question. An axis square to gravity is corrected in about a
+quarter of a second.
+
+What gravity cannot answer is a rotation about gravity itself: turning a pad
+that is lying flat. There is no reference, so that one is left to the sum and
+will creep. Held in the hands at a tilt it becomes partly visible again and
+gets partly corrected. The page reports which rotations are being measured
+from gravity and which are only being added up, because the difference is
+invisible otherwise.
+
+## The stub must not write a settings field
+
+The service republishes every settings field in one go, from `enabled` through
+`settings_seq`, about ten times a second, straight over whatever the page
+holds. The stub asked for a fresh rest position by bumping `rest_epoch`, which
+lives among the settings. The service put its own value back before the next
+frame, the difference the stub compares against flipped either way, and the
+remembered angle was thrown away at random.
+
+It is not a race that shows up now and then. The service simply wins, ten
+times a second. `stub.h` now asserts at build time that every field the stub
+writes sits after the published range.
+
+## Orphan recovery was unreachable in a large game
+
+A gateway left in an import slot by an earlier run is recognised by its shape,
+but only two hundred and fifty six candidates were ever tested, because each
+test costs a read of the game's memory. In a hundred and seventy megabyte
+executable that budget went on the first few kilobytes and the gateway was
+never examined, so the service could not take the game back after its own
+restart and the game had to be restarted by hand.
+
+Two facts dismiss nearly every candidate without a read: a gateway is laid out
+on a sixteen-byte stride, and it lives on a page the service mapped, which is
+not inside any module the game loaded.

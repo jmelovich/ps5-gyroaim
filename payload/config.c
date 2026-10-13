@@ -46,6 +46,7 @@ void ga_config_defaults(ga_config_t *c)
     }
     c->recentre = 0.0f;
     c->hold_band = 0.04f;
+    c->hold_correct = 4.0f;
     c->rest_on_activate = 1;
 
     c->accel_mul = 1.0f;             /* no acceleration by default */
@@ -109,6 +110,7 @@ void ga_config_clamp(ga_config_t *c)
     }
     c->recentre = clampf(c->recentre, 0.0f, 5.0f);
     c->hold_band = clampf(c->hold_band, 0.0f, 0.3f);
+    c->hold_correct = clampf(c->hold_correct, 0.0f, 50.0f);
     c->rest_on_activate = c->rest_on_activate ? 1 : 0;
     c->accel_mul = clampf(c->accel_mul, 0.1f, 8.0f);
     c->sens_lo_rate = clampf(c->sens_lo_rate, 0.0f, 500.0f);
@@ -157,6 +159,9 @@ void ga_args_init_consts(ga_args_t *a)
     a->k.ring_inv = 1.0f / (float)GA_RING_N;
     a->k.neg_counts = -127.0f;
     a->k.full = 255.0f;
+    a->k.half_turn = 180.0f;
+    a->k.right_angle = 90.0f;
+    a->k.quarter = 0.25f;
 }
 
 /* ---- the game's response curve ---------------------------------------- *
@@ -228,6 +233,7 @@ void ga_config_to_args(const ga_config_t *c, ga_args_t *a)
     }
     a->recentre = c->recentre;
     a->hold_band = c->hold_band;
+    a->hold_correct = c->hold_correct;
     a->rest_on_activate = (uint32_t)c->rest_on_activate;
     a->accel_mul = c->accel_mul;
     a->sens_lo_rate = c->sens_lo_rate;
@@ -252,6 +258,10 @@ void ga_config_to_args(const ga_config_t *c, ga_args_t *a)
         float x = (float)i / (float)GA_LUT_LAST;
         a->lut_to_vel[i] = deflection_to_speed(x, c);
         a->lut_to_stick[i] = speed_to_deflection(x, c);
+        /* Degrees, for a sine of x. The last entry is a right angle, where
+         * the slope is vertical and interpolation would undershoot, so it is
+         * written exactly. */
+        a->lut_asin[i] = (float)(asin(x > 1.0 ? 1.0 : x) * 180.0 / M_PI);
     }
 
     a->settings_seq++;
@@ -452,7 +462,8 @@ void ga_config_title_path(const char *title, char *out, size_t n)
     F("full_angle_pitch", full_angle[GA_SRC_PITCH])      \
     F("full_angle_roll", full_angle[GA_SRC_ROLL])        \
     F("recentre", recentre)                              \
-    F("hold_band", hold_band)                            \
+    F("hold_band", hold_band)                              \
+    F("hold_correct", hold_correct)                            \
     I("rest_on_activate", rest_on_activate)              \
     F("strength_yaw", strength[GA_SRC_YAW])              \
     F("strength_pitch", strength[GA_SRC_PITCH])          \

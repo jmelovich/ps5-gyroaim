@@ -107,6 +107,8 @@ font-size:19px;font-weight:600;line-height:1;text-align:center;cursor:pointer}
 <div class='cell'><b>Stick out</b><span id='v_out'>-</span></div>
 <div class='cell'><b>Trigger</b><span id='v_trig'>-</span></div>
 <div class='cell'><b>Drift</b><span id='v_drift'>-</span></div>
+<div class='cell'><b>Held angle</b><span id='v_held'>-</span></div>
+<div class='cell'><b>Measured from</b><span id='v_ref'>-</span></div>
 </div>
 <div class='charts' style='margin-top:10px'>
 <div class='chart'><h3>The game's stick curve</h3>
@@ -185,7 +187,8 @@ var SPEC=[
 ['calibrate','Learn the resting offset','bool','Watches the pad while it is still and subtracts what it reads then.']]],
 ['Holding',0,[
 ['recentre','Creep back to rest','num',0,5,0.05,'Fraction of a held angle given up each second. Zero holds for as long as you hold the pad, which is what steering wants.'],
-['hold_band','Treat as rest within','num',0,0.3,0.01,'Fraction of the full angle that counts as being at rest. Without a little of this the control never quite lets go.']],'sec_holding'],
+['hold_band','Treat as rest within','num',0,0.3,0.01,'Fraction of the full angle that counts as being at rest. Without a little of this the control never quite lets go.'],
+['hold_correct','Trust gravity','num',0,50,0.5,'How quickly a held angle is pulled onto the angle gravity measures, per second. Gravity is a direction the pad can always feel, so its answer never creeps, where adding rotation up does. Four settles in about a quarter of a second. Zero turns it off, and the angle will then wander away over a session.']],'sec_holding'],
 ['Rumble',0,[
 ['rumble','Rumble while turning','bool','Switches the pad to legacy motor emulation, which can change how the game’s own haptics feel.'],
 ['rumble_scale','Strength','num',0,1.5,0.05],
@@ -407,8 +410,8 @@ el('statusText').textContent=j.status;
 el('where').textContent=j.title?('game '+j.title):'';
 el('pathNote').textContent='Settings are being kept in '+j.path;
 var d=el('dot');
-if(!j.live){d.className='';['l_act','l_ry','l_rp','l_rr','l_df','l_so','l_sl',
-'l_tg','l_bias'].forEach(function(i){if(el(i))el(i).textContent='-'});
+if(!j.live){d.className='';['v_state','v_hand','v_cam','v_defl','v_in','v_out','v_trig',
+'v_drift','v_held','v_ref'].forEach(function(i){if(el(i))el(i).textContent='-'});
 trail=[];drawCurve();drawSens();return}
 var L=j.live;
 d.className=L.saturated?'bad':(L.active?'aim':'live');
@@ -422,6 +425,17 @@ el('v_in').textContent=L.in_x+', '+L.in_y;
 el('v_out').textContent=L.out_x+', '+L.out_y;
 el('v_trig').textContent='L2 '+L.l2+'  R2 '+L.r2;
 el('v_drift').textContent=L.cal_active?'aiming':(L.cal_count+' still');
+/* How far each rotation is from rest, and whether gravity is the thing it is
+ * being measured against. A rotation measured from gravity cannot creep. One
+ * that is only being added up will, so saying which is which turns a
+ * mystery into a reading. */
+var nm=['turn','tilt','lean'];
+el('v_held').textContent=L.held.map(function(h,i){
+return nm[i]+' '+h.toFixed(0)+'\u00b0'}).join('  ');
+var abs=L.hold_abs||[0,0,0];
+var sure=nm.filter(function(n,i){return abs[i]});
+el('v_ref').textContent=sure.length?('gravity: '+sure.join(', ')):'adding up only';
+el('v_ref').className=sure.length===3?'on':(sure.length?'':'warn');
 var camFrac=cfg.max_turn>0?
 Math.min(1,Math.hypot(L.want[0][0],L.want[0][1])/cfg.max_turn):0;
 trail.push([Math.min(1,L.out_frac),camFrac]);

@@ -49,6 +49,7 @@ typedef struct {
 
     /* How close to rest counts as at rest, as a fraction of the full angle. */
     float hold_band;
+    float hold_correct;       /* per second, toward what gravity measures */
 
     /* Take the rest position afresh each time the condition engages. */
     int   rest_on_activate;

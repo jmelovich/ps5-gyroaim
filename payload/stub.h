@@ -107,6 +107,9 @@ typedef struct {
     float ring_inv;       /* 1 / GA_RING_N */
     float neg_counts;     /* -127, so the stub never negates a float */
     float full;           /* 255, full motor strength */
+    float half_turn;      /* 180, for the far side of an arcsine */
+    float right_angle;    /* 90 */
+    float quarter;        /* 0.25, the least gravity an axis needs to see */
 } ga_consts_t;
 
 /* The page the service and the stub share. The stub references nothing
@@ -171,6 +174,11 @@ typedef struct {
      * stick and the game keeps drifting. */
     volatile float hold_band;
 
+    /* How quickly a remembered angle is pulled onto the answer gravity gives,
+     * per second. Four settles in about a quarter of a second. Zero turns the
+     * correction off and leaves the angle adding up, which drifts. */
+    volatile float hold_correct;
+
     /* Bumped to make wherever the pad is now the new resting position. */
     volatile uint32_t rest_epoch;
 
@@ -210,6 +218,12 @@ typedef struct {
     volatile float lut_to_vel[GA_LUT_N];
     volatile float lut_to_stick[GA_LUT_N];
 
+    /* Arcsine, in degrees, sampled over a sine of 0 to 1. Hold mode measures
+     * an angle from where gravity points, and that arrives as a sine and a
+     * cosine. There is no arcsine the injected block can call, so the service
+     * samples one here, the same way it samples the curves. */
+    volatile float lut_asin[GA_LUT_N];
+
     volatile uint32_t cal_epoch;         /* bumped to restart the window */
     volatile uint32_t settings_seq;
 
@@ -236,6 +250,21 @@ typedef struct {
     volatile float    angle[GA_SRC_COUNT];   /* degrees away from rest */
     volatile uint32_t rest_seen;             /* the epoch these angles start from */
     volatile uint32_t was_active;            /* to catch the moment it engages */
+
+    /* Where gravity pointed when rest was taken, as a unit vector in the
+     * pad's own frame, and whether it was worth recording. Tilting and
+     * leaning are measured against this rather than added up over time, which
+     * is the whole reason hold mode can be trusted for more than a few
+     * seconds. */
+    volatile float    rest_g[3];
+    volatile uint32_t rest_g_ok;
+
+    /* Per rotation: 1 when gravity could measure it this sample, 0 when the
+     * reading had to be added up instead. Turning a pad that is lying flat is
+     * the case gravity cannot see, because the pad turns about gravity
+     * itself. Reported so the page can say so rather than leave it a
+     * mystery. */
+    volatile uint32_t hold_abs[GA_SRC_COUNT];
     volatile uint64_t last_ts;
     volatile uint32_t rumble_last_level;
     volatile uint64_t rumble_last_ts;
@@ -269,6 +298,87 @@ typedef struct {
     uint64_t hook_orig[GA_MAX_SLOTS];
     uint32_t hook_prot[GA_MAX_SLOTS];
 } ga_args_t;
+
+/* Who may write what, enforced at build time.
+ *
+ * The service republishes every settings field in one go, from `enabled`
+ * through `settings_seq`, roughly ten times a second, straight over whatever
+ * the page holds. So any field the stub writes must sit after that range. A
+ * stub-written field inside it is not a race that shows up now and then: the
+ * service simply wins, about ten times a second, and the stub's write is
+ * never seen.
+ *
+ * That exact mistake shipped once. The stub asked for a fresh rest position
+ * by bumping `rest_epoch`, which lives among the settings, and the service
+ * put its own value back before the next frame. Hold mode reset at random and
+ * the cause was invisible from either side alone.
+ *
+ * Every field named below is written by stub.c. Keep the list in step with it:
+ * moving a field up among the settings, or teaching the stub to write a new
+ * settings field, now fails the build here rather than on the console.
+ *
+ * `age` is the one shared field and is deliberately absent. The stub counts
+ * reads up, the service zeroes it as a separate write after the settings, and
+ * it is only ever a staleness watchdog, so neither side needs the other's
+ * value.
+ */
+#define GA_PUBLISHED_END \
+    (__builtin_offsetof(ga_args_t, settings_seq) + sizeof(uint32_t))
+
+#define GA_STUB_OWNED(field)                                              \
+    _Static_assert(__builtin_offsetof(ga_args_t, field) >=                \
+                   GA_PUBLISHED_END,                                      \
+                   "the stub writes " #field ", so it must sit after "    \
+                   "settings_seq; the service overwrites everything "     \
+                   "before that")
+
+GA_STUB_OWNED(active);
+GA_STUB_OWNED(angle);
+GA_STUB_OWNED(cal_amax);
+GA_STUB_OWNED(cal_amin);
+GA_STUB_OWNED(cal_count);
+GA_STUB_OWNED(cal_max);
+GA_STUB_OWNED(cal_min);
+GA_STUB_OWNED(cal_seen);
+GA_STUB_OWNED(cal_sum);
+GA_STUB_OWNED(cal_was_active);
+GA_STUB_OWNED(carry);
+GA_STUB_OWNED(connected);
+GA_STUB_OWNED(held);
+GA_STUB_OWNED(in_lx);
+GA_STUB_OWNED(in_ly);
+GA_STUB_OWNED(in_rx);
+GA_STUB_OWNED(in_ry);
+GA_STUB_OWNED(last_accel);
+GA_STUB_OWNED(last_angvel);
+GA_STUB_OWNED(last_buttons);
+GA_STUB_OWNED(last_handle);
+GA_STUB_OWNED(last_result);
+GA_STUB_OWNED(last_timestamp);
+GA_STUB_OWNED(last_ts);
+GA_STUB_OWNED(out_frac);
+GA_STUB_OWNED(out_lx);
+GA_STUB_OWNED(out_ly);
+GA_STUB_OWNED(out_rx);
+GA_STUB_OWNED(out_ry);
+GA_STUB_OWNED(rate);
+GA_STUB_OWNED(rest_seen);
+GA_STUB_OWNED(rest_g);
+GA_STUB_OWNED(rest_g_ok);
+GA_STUB_OWNED(hold_abs);
+GA_STUB_OWNED(ring);
+GA_STUB_OWNED(ring_i);
+GA_STUB_OWNED(rumble_last_level);
+GA_STUB_OWNED(rumble_last_ts);
+GA_STUB_OWNED(rumble_mode_ts);
+GA_STUB_OWNED(saturated);
+GA_STUB_OWNED(want);
+GA_STUB_OWNED(was_active);
+GA_STUB_OWNED(applied);
+GA_STUB_OWNED(calls);
+GA_STUB_OWNED(sample_seq);
+
+#undef GA_STUB_OWNED
 
 int32_t ga_stub_read_state(int32_t handle, uint8_t *data, ga_args_t *a);
 int32_t ga_stub_read_state_ext(int32_t handle, uint8_t *data, ga_args_t *a);

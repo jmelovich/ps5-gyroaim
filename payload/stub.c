@@ -149,7 +149,8 @@ static INLINE void feed_calibration(ga_args_t *a, const float av[3],
  * Gravity comes from the accelerometer, which is only trustworthy when the
  * pad is not being shaken, hence the magnitude check. */
 static INLINE void rates(const ga_args_t *a, const float av[3],
-                         const float ac[3], float out[GA_SRC_COUNT])
+                         const float ac[3], float out[GA_SRC_COUNT],
+                         float local[GA_SRC_COUNT])
 {
     uint32_t iy = a->axis_yaw > 2 ? 1 : a->axis_yaw;
     uint32_t ip = a->axis_pitch > 2 ? 0 : a->axis_pitch;
@@ -187,6 +188,15 @@ static INLINE void rates(const ga_args_t *a, const float av[3],
     out[GA_SRC_YAW] = yaw * a->k.rad_to_deg;
     out[GA_SRC_PITCH] = pitch * a->k.rad_to_deg;
     out[GA_SRC_ROLL] = w[ir] * a->k.rad_to_deg;
+
+    /* The plain rotation about each axis, with none of the gravity-referenced
+     * reshaping above. A remembered angle is built from these: the reshaping
+     * is a feel adjustment for aiming and is not something whose integral
+     * means anything, so integrating it made turning out and back fail to
+     * cancel. */
+    local[GA_SRC_YAW] = w[iy] * a->k.rad_to_deg;
+    local[GA_SRC_PITCH] = w[ip] * a->k.rad_to_deg;
+    local[GA_SRC_ROLL] = w[ir] * a->k.rad_to_deg;
 }
 
 /* Tremor handling: pull very slow rotation toward zero, and blend slow
@@ -404,6 +414,7 @@ static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
     uint32_t age = __atomic_add_fetch(&a->age, 1u, __ATOMIC_RELAXED);
     float av[3], ac[3];
     float rate[GA_SRC_COUNT];
+    float local[GA_SRC_COUNT];
 
     for (int i = 0; i < 3; i++) {
         av[i] = load_float(data + GA_OFF_ANGVEL + 4 * i);
@@ -427,6 +438,12 @@ static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
 
     int active = a->enabled && age <= GA_STALE_READS && is_active(a, data);
 
+    /* Taking rest from the moment the condition engages means pressing the
+     * trigger says "straight ahead is here", and nothing has time to drift. */
+    if (active && !a->was_active && a->rest_on_activate)
+        a->rest_epoch = a->rest_epoch + 1;
+    a->was_active = active ? 1u : 0u;
+
     feed_calibration(a, av, ac, active);
 
     /* Time since the previous distinct sample. A game may read the pad more
@@ -443,7 +460,7 @@ static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
     if (fresh)
         a->last_ts = ts;
 
-    rates(a, av, ac, rate);
+    rates(a, av, ac, rate, local);
     for (int i = 0; i < GA_SRC_COUNT; i++)
         a->rate[i] = rate[i];
 
@@ -472,12 +489,10 @@ static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
         return;
     }
 
-    if (fresh)
-        steady(a, rate);
-
-    /* A held angle is kept whether or not the transform is applying anything,
-     * so tilting while disengaged and then engaging gives the right answer
-     * rather than starting from wherever the pad happened to be. */
+    /* The remembered angle is built from the plain rates, before any
+     * tightening or smoothing. Those shrink slow movement, which is fine for
+     * feel but ruinous for an integral: turning out quickly and back slowly
+     * would not cancel. */
     if (a->rest_seen != a->rest_epoch) {
         a->rest_seen = a->rest_epoch;
         for (int i = 0; i < GA_SRC_COUNT; i++)
@@ -485,22 +500,23 @@ static INLINE void transform(ga_args_t *a, uint8_t *data, int32_t handle)
     }
     if (fresh && dt > a->k.zero) {
         for (int i = 0; i < GA_SRC_COUNT; i++) {
-            float next = a->angle[i] + rate[i] * dt;
+            float next = a->angle[i] + local[i] * dt;
             if (a->recentre > a->k.zero) {
                 float shed = a->recentre * dt;
                 if (shed > a->k.one)
                     shed = a->k.one;
                 next = next - next * shed;
             }
-            /* Clamped at the full-deflection angle so it cannot wind up past
-             * what it can ask for and then unwind on the way back. */
-            float limit = a->full_angle[i] > a->k.eps ? a->full_angle[i]
-                                                      : a->k.one;
-            a->angle[i] = fclamp(a, next, a->k.zero - limit, limit);
+            float cap = a->angle_cap[i] > a->k.eps ? a->angle_cap[i]
+                                                   : a->k.one;
+            a->angle[i] = fclamp(a, next, a->k.zero - cap, cap);
         }
     }
     for (int i = 0; i < GA_SRC_COUNT; i++)
         a->held[i] = a->angle[i];
+
+    if (fresh)
+        steady(a, rate);
 
     float accel = accel_factor(a, rate);
     float busiest = a->k.zero;

@@ -50,6 +50,9 @@ typedef struct {
     /* How close to rest counts as at rest, as a fraction of the full angle. */
     float hold_band;
 
+    /* Take the rest position afresh each time the condition engages. */
+    int   rest_on_activate;
+
     /* Acceleration: multiply by 1 below lo_rate, rising to accel_mul at
      * hi_rate. A multiplier of 1 means none. */
     float accel_mul;

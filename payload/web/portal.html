@@ -132,6 +132,12 @@ move both sticks, and a column can be fed by more than one rotation.</p>
 <span class='hint'>Hold the controller the way you mean to rest, then set it.
 Everything a held rotation does is measured from there.</span></span>
 <button id='setRest'>Set rest here</button></div>
+<div class='row'><span class='lbl'>Take rest when it engages
+<span class='hint'>Whatever way the controller is held the moment the trigger
+or button goes down becomes straight ahead, for as long as it is held. Leave
+this on unless you want one fixed rest position set by hand.</span></span>
+<label class='sw'><input type=checkbox id='rest_on_activate'><span></span></label>
+</div>
 </div></details></section>
 <section><details><summary>Profile</summary><div class='body'>
 <div class='btns'>
@@ -246,6 +252,8 @@ h+="<input type=range id='"+k+"' min='"+f[3]+"' max='"+f[4]+"' step='"+f[5]+"'>"
 h+='</div>'});
 h+='</div></details></section>'});
 el('form').innerHTML=h;
+['rest_on_activate'].forEach(function(k){
+if(el(k)){K.push(k);META[k]={kind:'bool'}}});
 K.forEach(function(k){
 var e=el(k),n=el('n_'+k);
 if(META[k].kind==='num'){

@@ -46,6 +46,7 @@ void ga_config_defaults(ga_config_t *c)
     }
     c->recentre = 0.0f;
     c->hold_band = 0.04f;
+    c->rest_on_activate = 1;
 
     c->accel_mul = 1.0f;             /* no acceleration by default */
     c->sens_lo_rate = 0.0f;
@@ -108,6 +109,7 @@ void ga_config_clamp(ga_config_t *c)
     }
     c->recentre = clampf(c->recentre, 0.0f, 5.0f);
     c->hold_band = clampf(c->hold_band, 0.0f, 0.3f);
+    c->rest_on_activate = c->rest_on_activate ? 1 : 0;
     c->accel_mul = clampf(c->accel_mul, 0.1f, 8.0f);
     c->sens_lo_rate = clampf(c->sens_lo_rate, 0.0f, 500.0f);
     c->sens_hi_rate = clampf(c->sens_hi_rate, 0.0f, 1000.0f);
@@ -215,11 +217,18 @@ void ga_config_to_args(const ga_config_t *c, ga_args_t *a)
         a->strength[s] = c->strength[s];
         a->read_mode[s] = (uint32_t)c->read_mode[s];
         a->full_angle[s] = c->full_angle[s];
+        /* Generous on purpose: the stored angle has to follow the pad well
+         * past full deflection, or turning further than full and coming back
+         * does not cancel. */
+        a->angle_cap[s] = c->full_angle[s] * 6.0f;
+        if (a->angle_cap[s] < 180.0f)
+            a->angle_cap[s] = 180.0f;
         for (int d = 0; d < GA_OUT_COUNT; d++)
             a->route[s][d] = (float)c->route[s][d];
     }
     a->recentre = c->recentre;
     a->hold_band = c->hold_band;
+    a->rest_on_activate = (uint32_t)c->rest_on_activate;
     a->accel_mul = c->accel_mul;
     a->sens_lo_rate = c->sens_lo_rate;
     a->sens_hi_rate = c->sens_hi_rate;
@@ -444,6 +453,7 @@ void ga_config_title_path(const char *title, char *out, size_t n)
     F("full_angle_roll", full_angle[GA_SRC_ROLL])        \
     F("recentre", recentre)                              \
     F("hold_band", hold_band)                            \
+    I("rest_on_activate", rest_on_activate)              \
     F("strength_yaw", strength[GA_SRC_YAW])              \
     F("strength_pitch", strength[GA_SRC_PITCH])          \
     F("strength_roll", strength[GA_SRC_ROLL])            \

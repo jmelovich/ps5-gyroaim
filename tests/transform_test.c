@@ -297,19 +297,52 @@ int main(void)
         check("coming back to rest centres the stick completely",
               out[GA_OFF_RX] == 128, out[GA_OFF_RX], 128);
 
-        /* Past the full angle it stops asking for more, so coming back does
-         * not have to unwind an overshoot first. */
-        spin(&a, 90.0f, 1500, out);
+        /* Past the full angle the control stays at full, but the angle keeps
+         * following the pad, so turning further out and all the way back
+         * lands at rest rather than pushed the other way. This is what being
+         * 50 percent out after a 90 degree turn looked like. */
+        spin(&a, 90.0f, 1000, out);             /* 90 degrees out, full at 45 */
         int pinned = out[GA_OFF_RX];
+        check("well past full, the control is just at full", pinned > 240,
+              pinned, 255);
+        spin(&a, -90.0f, 1000, out);            /* and all the way back */
+        check("turning out past full and back lands at rest",
+              out[GA_OFF_RX] == 128, out[GA_OFF_RX], 128);
+    }
+
+    /* Engaging takes rest afresh, so the pad's angle when the trigger goes
+     * down is straight ahead however it was held before. */
+    c.activation = GA_ACT_TRIGGER;
+    c.trigger_threshold = 64;
+    c.rest_on_activate = 1;
+    ga_config_clamp(&c);
+    {
+        uint8_t out[GA_PAD_SIZE];
+        sample_reset();
+        prepare(&a, &c);
+        g_when = 1000000;
+
+        /* Tilt a long way with the trigger up: nothing should be held. */
+        spin(&a, 60.0f, 1000, out);
+        check("not engaged, the stick is untouched", out[GA_OFF_RX] == 128,
+              out[GA_OFF_RX], 128);
+
+        /* Now press the trigger while still tilted over. */
+        g_sample[GA_OFF_L2] = 200;
         spin(&a, 0.0f, 200, out);
-        check("beyond the full angle it just stays at full",
-              out[GA_OFF_RX] == pinned && pinned > 230, out[GA_OFF_RX], 255);
-        spin(&a, -90.0f, 600, out);
-        check("and lets go as soon as it comes back",
-              out[GA_OFF_RX] < 200, out[GA_OFF_RX], 150);
+        check("engaging where you are is treated as rest",
+              out[GA_OFF_RX] == 128, out[GA_OFF_RX], 128);
+
+        /* From there, tilting further does push. */
+        spin(&a, 45.0f, 500, out);
+        check("and moving on from there pushes", out[GA_OFF_RX] > 150,
+              out[GA_OFF_RX], 190);
+        g_sample[GA_OFF_L2] = 0;
     }
 
     /* The contrast: read as a speed, the same hold springs back. */
+    c.activation = GA_ACT_ALWAYS;
+    ga_config_clamp(&c);
     c.read_mode[GA_SRC_YAW] = GA_READ_FLOW;
     ga_config_clamp(&c);
     {

@@ -146,6 +146,19 @@ typedef struct {
     volatile uint32_t read_mode[GA_SRC_COUNT];   /* GA_READ_* */
     volatile float full_angle[GA_SRC_COUNT];     /* degrees */
 
+    /* How far the remembered angle may run before it stops counting. Well
+     * past full_angle on purpose: clamping the stored angle at the full
+     * deflection throws away any rotation beyond it, so turning further than
+     * full and coming back lands nowhere near rest. Only the output is
+     * clamped; the angle itself tracks where the pad actually is. */
+    volatile float angle_cap[GA_SRC_COUNT];      /* degrees */
+
+    /* Make wherever the pad is the rest position each time the condition
+     * engages. Pressing the trigger then means "straight ahead is here", which
+     * is both what steering wants and what keeps a slow drift from ever
+     * building up. */
+    volatile uint32_t rest_on_activate;
+
     /* How quickly a held angle creeps back to rest on its own, as a fraction
      * shed per second. Zero holds for as long as the pad is held, which is
      * what steering wants; a little lets integration drift forgive itself. */
@@ -222,6 +235,7 @@ typedef struct {
     volatile float    carry[GA_STICK_COUNT][2];
     volatile float    angle[GA_SRC_COUNT];   /* degrees away from rest */
     volatile uint32_t rest_seen;             /* the epoch these angles start from */
+    volatile uint32_t was_active;            /* to catch the moment it engages */
     volatile uint64_t last_ts;
     volatile uint32_t rumble_last_level;
     volatile uint64_t rumble_last_ts;

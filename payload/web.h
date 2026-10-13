@@ -16,6 +16,7 @@ typedef struct {
     int         cfg_dirty;      /* portal changed something */
     int         save_as_title;  /* portal asked to keep these per game */
     int         reload_request; /* portal asked to reread the file */
+    int         defaults_request; /* portal asked for the built-in settings */
     int         quit_request;   /* portal asked the service to stop */
     int         rest_request;   /* portal asked to make here the rest position */
     int         uninstall;      /* 1 keep settings, 2 take those too */

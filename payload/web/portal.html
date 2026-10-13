@@ -98,6 +98,7 @@ color:var(--mut);border-radius:8px;padding:0 2px;height:40px;font:inherit;
 font-size:12.5px;font-weight:600;line-height:1.1;cursor:pointer}
 .bchip.on{border-color:var(--acc);color:#fff;background:var(--acc)}
 .bchip.down{box-shadow:inset 0 0 0 2px var(--ok)}
+.armed{border-color:var(--warn);color:var(--warn);font-weight:600}
 .on{color:var(--ok);font-weight:600}
 .warn{color:var(--warn);font-weight:600}
 .off{color:var(--mut)}
@@ -152,7 +153,12 @@ this on unless you want one fixed rest position set by hand.</span></span>
 <div class='btns'>
 <button id='saveTitle'>Keep these for this game</button>
 <button class='flat' id='reload'>Reload from disk</button>
+<button class='flat' id='defaults'>Reset to defaults</button>
 </div>
+<p class='note'>Resetting gives plain gyro aiming: left trigger to switch it
+on, turning and tilting on the right stick, read as a speed. The learned
+resting offset is kept, since that belongs to the controller rather than to
+any setting. It replaces whatever is in force now, in the file named below.</p>
 <p class='note' id='pathNote'></p>
 </div></details></section>
 <p class='note'>No password. Anyone on this network can change these settings.</p>
@@ -540,6 +546,21 @@ el('saveTitle').addEventListener('click',function(){
 fetch('/api/save?scope=title').then(tick)});
 el('reload').addEventListener('click',function(){
 fetch('/api/reload').then(tick)});
+/* Two presses, because one press would throw away an evening's tuning and
+   there is no getting it back. The arm lapses on its own, so a stray press
+   cannot sit there waiting to be completed by the next one. */
+var armed=0,armTimer=0;
+el('defaults').addEventListener('click',function(){
+var b=el('defaults');
+if(!armed){
+armed=1;b.textContent='Press again to reset';b.className='flat armed';
+clearTimeout(armTimer);
+armTimer=setTimeout(function(){
+armed=0;b.textContent='Reset to defaults';b.className='flat'},4000);
+return}
+clearTimeout(armTimer);armed=0;
+b.textContent='Reset to defaults';b.className='flat';
+fetch('/api/defaults').then(tick)});
 window.addEventListener('resize',function(){drawCurve();drawSens()});
 tick();setInterval(tick,200);
 </script>

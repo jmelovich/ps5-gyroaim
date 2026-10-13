@@ -174,6 +174,7 @@ static void serve(int fd, ga_web_state_t *st)
 
     if (!strcmp(path, "/api/state") || !strcmp(path, "/api/set") ||
         !strcmp(path, "/api/save") || !strcmp(path, "/api/reload") ||
+        !strcmp(path, "/api/defaults") ||
         !strcmp(path, "/api/quit") || !strcmp(path, "/api/uninstall") ||
         !strcmp(path, "/api/rest")) {
         char *body = malloc(RESP_MAX);
@@ -188,6 +189,8 @@ static void serve(int fd, ga_web_state_t *st)
             st->save_as_title = 1;
         else if (!strcmp(path, "/api/reload"))
             st->reload_request = 1;
+        else if (!strcmp(path, "/api/defaults"))
+            st->defaults_request = 1;
         else if (!strcmp(path, "/api/rest"))
             st->rest_request = 1;
         else if (!strcmp(path, "/api/quit"))

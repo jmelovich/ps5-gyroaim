@@ -469,6 +469,20 @@ int main(void)
             settings.rest_epoch++;
             ga_log("rest position set where the pad is now");
         }
+        if (web.defaults_request) {
+            web.defaults_request = 0;
+            /* The learned gyro offset is a property of the pad, not a
+             * preference, so it survives. Wiping it would only make the next
+             * minute of play worse while it was measured again. */
+            float keep[3] = { web.cfg.bias[0], web.cfg.bias[1],
+                              web.cfg.bias[2] };
+            ga_config_defaults(&web.cfg);
+            for (int i = 0; i < 3; i++)
+                web.cfg.bias[i] = keep[i];
+            web.cfg_dirty = 1;
+            ga_log("settings put back to the defaults, kept in %s",
+                   active_path);
+        }
         if (web.reload_request) {
             web.reload_request = 0;
             if (ga_config_for_title(&web.cfg, title, active_path,

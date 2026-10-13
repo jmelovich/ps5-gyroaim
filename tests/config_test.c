@@ -72,6 +72,48 @@ int main(void)
      * it names the condition and nothing else. */
     write_file(GA_DIR "/PPSA00002.txt", "activation=2\ntrigger_right=1\n");
 
+    printf("the defaults are plain gyro aiming\n");
+
+    /* What the page's reset button hands back. Someone who has lost their
+     * tuning wants to land somewhere that works, not somewhere neutral, so
+     * these are pinned: left trigger to switch it on, turning and tilting on
+     * the right stick, read as a speed. */
+    {
+        ga_config_t d;
+
+        ga_config_defaults(&d);
+        check("it is on", d.enabled == 1, d.enabled, 1);
+        check("the left trigger switches it on",
+              d.activation == GA_ACT_TRIGGER && d.trigger_right == 0,
+              d.activation, GA_ACT_TRIGGER);
+        check("and a button condition would use L2 too",
+              d.activation_mask == GA_BTN_L2, d.activation_mask, GA_BTN_L2);
+        check("turning moves the right stick sideways",
+              d.route[GA_SRC_YAW][GA_OUT_RIGHT_X] == -1,
+              d.route[GA_SRC_YAW][GA_OUT_RIGHT_X], -1);
+        check("tilting moves it vertically",
+              d.route[GA_SRC_PITCH][GA_OUT_RIGHT_Y] == 1,
+              d.route[GA_SRC_PITCH][GA_OUT_RIGHT_Y], 1);
+        check("leaning does nothing until asked",
+              d.route[GA_SRC_ROLL][GA_OUT_RIGHT_X] == 0 &&
+              d.route[GA_SRC_ROLL][GA_OUT_RIGHT_Y] == 0,
+              d.route[GA_SRC_ROLL][GA_OUT_RIGHT_X], 0);
+
+        int left = 0;
+        for (int s = 0; s < GA_SRC_COUNT; s++)
+            if (d.route[s][GA_OUT_LEFT_X] != 0 ||
+                d.route[s][GA_OUT_LEFT_Y] != 0)
+                left++;
+        check("nothing touches the left stick", left == 0, left, 0);
+
+        int flow = 0;
+        for (int s = 0; s < GA_SRC_COUNT; s++)
+            if (d.read_mode[s] == GA_READ_FLOW)
+                flow++;
+        check("every rotation is read as a speed, which aiming wants",
+              flow == GA_SRC_COUNT, flow, GA_SRC_COUNT);
+    }
+
     printf("a game's own profile takes effect\n");
     int own = ga_config_for_title(&c, "PPSA00001", path, sizeof(path));
     check("the game's own profile is reported as in force", own == 1, own, 1);

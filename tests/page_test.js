@@ -47,6 +47,16 @@ global.fetch = (url) => {
   return Promise.resolve({ json: () => Promise.resolve(state) });
 };
 global.setInterval = () => 0;
+// Timers the test can run on demand, so a four second arm does not mean a
+// four second test.
+const timers = [];
+global.setTimeout = (fn) => { timers.push(fn); return timers.length; };
+global.clearTimeout = (id) => { if (id) timers[id - 1] = null; };
+const runTimers = () => {
+  const due = timers.slice();
+  timers.length = 0;
+  due.forEach(fn => fn && fn());
+};
 const settle = () => new Promise(r => setImmediate(r));
 // The page redraws itself from the service's reply, and in here nothing is
 // polling, so a reply has to be asked for. Reload does that.
@@ -152,6 +162,37 @@ async function conditions() {
   check('the last button left cannot be cleared',
         !sent.some(u => /activation_mask=0(&|$)/.test(u)),
         sent.length ? 'a mask was sent' : 'nothing was sent');
+
+  // Resetting throws away tuning that cannot be got back, so one press must
+  // not do it. The button arms, and the arm has to lapse on its own, or a
+  // stray press would sit waiting to be completed by an unrelated one later.
+  sent.length = 0;
+  nodes['defaults'].fire('click');
+  await settle();
+  check('one press does not reset anything',
+        !sent.some(u => /api\/defaults/.test(u)),
+        nodes['defaults'].textContent);
+  check('the button says it wants another press',
+        /again/i.test(nodes['defaults'].textContent) &&
+        / armed$/.test(nodes['defaults'].className),
+        nodes['defaults'].textContent);
+
+  nodes['defaults'].fire('click');
+  await settle();
+  check('the second press resets', sent.some(u => /api\/defaults/.test(u)),
+        sent.filter(u => /defaults/.test(u)).length + ' asked');
+  check('and the button goes back to offering it',
+        /^Reset/.test(nodes['defaults'].textContent),
+        nodes['defaults'].textContent);
+
+  sent.length = 0;
+  nodes['defaults'].fire('click');     // arms
+  runTimers();                         // and the arm lapses
+  nodes['defaults'].fire('click');     // so this only arms again
+  await settle();
+  check('an arm left alone lapses rather than waiting',
+        !sent.some(u => /api\/defaults/.test(u)),
+        nodes['defaults'].textContent);
 
   console.log(failures ? '\npage checks FAILED' : '\nall page checks passed');
   process.exit(failures ? 1 : 0);

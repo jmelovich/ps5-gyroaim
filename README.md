@@ -4,7 +4,9 @@ Gyro aiming in any game on a jailbroken PS5.
 
 A resident service folds the DualSense's gyroscope into the control a game
 actually reads, usually the right stick, while a condition you choose is met,
-usually holding the left trigger. Tune it from a phone while the game runs.
+usually holding the left trigger. Each rotation can turn the view as you move
+it or hold the control over while you keep the pad tilted, so the same tool
+aims and steers. Tune it from a phone while the game runs.
 
 Experimental homebrew for the author's own console. It writes into a running
 game's memory: **save your progress before testing.**
@@ -23,24 +25,40 @@ ShadowMount+ 1.7beta4.
 - **Any rotation to any control.** Turning, tilting and leaning each route to
   the right stick's two axes, the left stick's two axes, or several at once,
   in either direction. So the view can be on one stick and movement on the
-  other, or one rotation can drive both. Gated on a trigger, a button, or
-  always.
+  other, or one rotation can drive both.
+- **Aiming or steering, per rotation.** Read as a speed it turns the view
+  while you keep moving; read as an angle from rest it holds the control over
+  until you come back, which is what driving, skating and flying want.
+- **A held angle is measured against gravity**, so it cannot creep. Turning a
+  pad lying flat is the one rotation gravity cannot see, and the page says so
+  rather than leaving it to be discovered.
 - **Works in camera-velocity space**, so the game's own deadzone and response
   curve are inverted rather than fought. This is the part that makes aiming
   feel proportional instead of mushy near the centre and twitchy further out.
+- **Gated on a trigger, a named button, or always.** A button condition picks
+  from a chip per button, or takes the whole set from whatever you are
+  holding.
 - Strength per rotation, in degrees of view per degree of hand movement, with
   an acceleration multiplier that comes in over a speed band.
 - Drift calibration that learns the gyro's resting offset while the pad is
-  still, and knows not to trust a window in which you were aiming.
+  still, judged by how small the offset is rather than by whether you happened
+  to be aiming.
 - Tiered smoothing and tightening, so fine aim is steady and flicks are not.
 - Flick carry, so a fast movement that asks for more than full deflection
   still completes instead of being clipped.
 - Player space, taking yaw around gravity, so a tilted pad still turns level.
-- Turn-rate rumble, and per-game profiles chosen automatically.
-- 33 settings, all live from the portal.
+- Turn-rate rumble.
+- **Per-game profiles, chosen automatically and layered** over your general
+  settings, so a profile inherits what it does not mention rather than
+  borrowing it from whatever was played last.
+- **A reset to the defaults**, from the page, back to plain aiming on the
+  right stick with the left trigger.
+- 50 settings, all live from the portal.
+- Only one service can run at a time, and the panel replaces an older one
+  rather than leaving two installed.
 - Installs and removes cleanly; the game keeps running either way.
 
-Not built yet: the touchpad as a target, and the native app.
+Not built yet: the touchpad as a target.
 
 ## Tuning it
 
@@ -56,7 +74,15 @@ you:
   movements move the camera by the right amount.
 
 The live panel shows your hand's rate, the camera speed being asked for, and
-the deflection being sent, which makes the effect of each setting visible.
+the deflection being sent, which makes the effect of each setting visible. It
+also shows how far each rotation is from rest and whether gravity is what that
+is measured against, which is the difference between an angle that holds and
+one that creeps.
+
+For steering rather than aiming, switch a rotation to being held and set how
+far from rest counts as full. Rest is taken whenever the condition engages, so
+pressing the trigger says "straight ahead is here"; there is a button for
+setting it by hand, and a switch to stop it being retaken.
 
 ## Tests
 
@@ -64,9 +90,19 @@ the deflection being sent, which makes the effect of each setting visible.
 make -C tests check
 ```
 
-Both run on the host with no console. One checks the response-curve tables are
-genuine inverses; the other runs the injected transform itself against a
-stand-in pad, which is the only practical way to test sign conventions.
+All of them run on the host with no console attached, and each exists because
+of a bug it would have caught.
+
+- **config** builds the settings for a game from real files, after per-game
+  profiles were found leaking into one another.
+- **curve** checks the response-curve tables are genuine inverses.
+- **transform** runs the injected transform against a stand-in pad, which is
+  the only practical way to test sign conventions and the only way to prove a
+  held angle does not creep without waiting half an hour.
+- **qr** decodes the code the panel draws.
+- **page** runs the portal's own script against a stub DOM and presses its
+  controls, after a section rendered empty with the script parsing cleanly.
+  Skipped when `node` is missing.
 
 ## The two pieces
 
@@ -80,7 +116,10 @@ puts a QR code on screen so a phone can reach the settings. Closing the panel
 leaves the service running.
 
 The panel ships the service inside its own package, so it works on a console
-that has never had either.
+that has never had either, and it keeps the two in step: on launch it replaces
+a running service that differs from the one it carries, and refreshes the copy
+that starts with the console. Updating the app therefore updates the service,
+rather than leaving an older one running with nothing saying so.
 
 ## Build and run
 
@@ -129,7 +168,15 @@ collapse so the page is not a wall of controls.
 Routing is a three by four grid: a row per rotation, a column per control.
 Tapping a square cycles it between blank, on, and inverted. That keeps the
 whole mapping visible at a glance and avoids a separate copy of every slider
-for every axis, which is what a direct approach would have cost.
+for every axis, which is what a direct approach would have cost. Each row also
+carries whether that rotation is read as a speed or held as an angle.
+
+The condition shows only the settings it uses: a trigger brings up which
+trigger and its threshold, a button brings up a chip for each button instead.
+
+**Keep these for this game** writes a profile the service picks up on its own
+next time that game starts. **Reset to defaults** goes back to plain aiming,
+and asks twice, since there is no getting a tuned profile back.
 
 Two live graphs show what is happening: the game's stick curve with a dot
 tracing where you are on it, and hand speed against view speed.
@@ -145,13 +192,20 @@ camera is not the limit.
 ## Releasing
 
 ```sh
-tools/release.sh 0.6.0
-git push origin main v0.6.0
+$EDITOR docs/releases/v1.0.3.md          # what changed, in a few lines
+tools/release.sh 1.0.3
+git push origin main v1.0.3
 ```
 
 That builds, tests, checks the package against the catalog's rules, stamps the
-version in the three places it lives, commits and tags. GitHub then assembles
-the title and opens a draft release with the archive attached.
+version in both files it lives in, commits and tags. GitHub then assembles
+the title and opens a draft release with the archive attached, for you to read
+and publish.
+
+The notes come from `docs/releases/<tag>.md`, with the install and warning
+sections generated around it by `tools/release-notes.sh`, which you can run
+yourself to see exactly what will be posted. Keeping them in the repo is what
+lets them be reviewed, and what stops them being lost when a tag is re-cut.
 [docs/RELEASING.md](docs/RELEASING.md) has the details, including why the
 version has to be committed before the tag.
 

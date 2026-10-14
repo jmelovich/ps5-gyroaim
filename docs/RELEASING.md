@@ -3,14 +3,15 @@
 One command cuts a release, and GitHub builds it:
 
 ```sh
-tools/release.sh 0.6.0
-git push origin main v0.6.0
+$EDITOR docs/releases/v1.0.3.md          # what changed, in a few lines
+tools/release.sh 1.0.3
+git push origin main v1.0.3
 ```
 
 `release.sh` builds, runs the tests and the submission checks, stamps the
-version in both places it lives, commits that, and tags it. The workflow then
-assembles the title, attaches the archive to a **draft** release, and leaves
-publishing to you.
+version in both files it lives in, commits that, and tags it. The workflow
+then assembles the title, attaches the archive to a **draft** release, and
+leaves publishing to you.
 
 ## Why the versions are stamped before tagging
 
@@ -88,8 +89,19 @@ The scan will also note that the app connects to the payload loader on
 
 ## Release notes
 
-The workflow writes a first draft covering installation, what the console
-needs, and the settings page, with a compare link to the previous tag. Edit it
-before publishing. The catalog turns release notes into the app's notes on the
-website and in the store, so put what changed first, under short headings with
-bullet lists. Images, links and HTML are not carried over.
+Notes have two parts. What is worth saying about a particular release goes in
+`docs/releases/<tag>.md`, written before cutting the tag. The install section,
+what the console needs, the settings page and the compare link are the same
+every time and are generated around it.
+
+`tools/release-notes.sh <tag>` prints the result, so the notes can be read
+before anyone publishes them. The workflow calls the same script, so what you
+see locally is what gets posted.
+
+Keeping them in the repo matters for two reasons. Notes written straight into
+the draft cannot be reviewed like anything else, and they are lost the moment
+a tag is re-cut, which happens whenever a problem is found before publishing.
+
+The catalog turns release notes into the app's notes on the website and in the
+store, so lead with one sentence on what the app is for, then what changed,
+one sentence a bullet. Images, links and HTML are not carried over.
